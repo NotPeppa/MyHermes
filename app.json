@@ -12,14 +12,26 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "dev.myhermes.mobile",
-      "edgeToEdgeEnabled": true
+      "package": "dev.myhermes.mobile"
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-sqlite",
-      "expo-status-bar"
+      [
+        "./plugins/withAndroidShortcuts",
+        {
+          "scheme": "myhermes"
+        }
+      ],
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": [
+            "text/*",
+            "image/*"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

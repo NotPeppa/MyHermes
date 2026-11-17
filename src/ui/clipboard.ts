@@ -7,3 +7,12 @@ import { Clipboard } from 'react-native';
 export function copyText(text: string): void {
   Clipboard.setString(text);
 }
+
+/** 读取剪贴板文本；Android 10+ 只在应用获得焦点时可读，读不到返回空字符串。 */
+export async function readClipboardText(): Promise<string> {
+  try {
+    return (await Clipboard.getString()) ?? '';
+  } catch {
+    return '';
+  }
+}

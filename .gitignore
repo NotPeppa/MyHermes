@@ -1,6 +1,9 @@
 node_modules/
 .expo/
 dist/
+# 原生工程由 expo prebuild 生成，不入库（config plugin 才是源头）
+/android/
+/ios/
 web-build/
 *.log
 .DS_Store
