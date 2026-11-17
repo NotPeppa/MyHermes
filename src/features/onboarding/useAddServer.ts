@@ -8,7 +8,7 @@ import { enabledFeatures, modeLabel } from '@/features/common/status';
 import { hostOf } from '@/features/settings/diagnostics';
 
 export type StageId = 'url' | 'capabilities' | 'auth' | 'api';
-export type StageStatus = 'pending' | 'running' | 'ok' | 'fail';
+export type StageStatus = 'pending' | 'running' | 'ok' | 'fail' | 'skipped';
 
 export interface DiagnosticStage {
   id: StageId;
@@ -139,6 +139,23 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
     setStages((current) => current.map((stage) => (stage.id === id ? { ...stage, ...next } : stage)));
   }, []);
 
+  /**
+   * 某一步失败后立刻停手：标记失败原因，并把后续阶段标成「未执行」。
+   * 否则上一层失败后，下一层会永远停在「检测中」。
+   */
+  const failAt = useCallback((id: StageId, detail: string) => {
+    const failedIndex = STAGE_ORDER.indexOf(id);
+    setStages((current) =>
+      current.map((stage) => {
+        if (stage.id === id) return { ...stage, status: 'fail', detail };
+        if (STAGE_ORDER.indexOf(stage.id) > failedIndex) return { ...stage, status: 'skipped', detail: undefined };
+        // 失败时仍在「检测中」的层没有结论，标成未执行，避免永远转圈
+        if (stage.status === 'running') return { ...stage, status: 'skipped', detail: undefined };
+        return stage;
+      }),
+    );
+  }, []);
+
   const cancel = useCallback(() => {
     controllerRef.current?.abort();
     controllerRef.current = null;
@@ -159,13 +176,13 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
         detail: `主机 ${hostOf(baseUrl)} · ${baseUrl.startsWith('https:') ? 'HTTPS' : '明文 HTTP（开发）'}`,
       });
     } catch (validationError) {
-      updateStage('url', { status: 'fail', detail: describeError(validationError) });
+      failAt('url', describeError(validationError));
       setError(describeError(validationError));
       return null;
     }
 
     if (apiKey.trim().length === 0) {
-      updateStage('auth', { status: 'fail', detail: 'API Key 为空' });
+      failAt('auth', 'API Key 为空');
       setError('请输入 API Key');
       return null;
     }
@@ -195,8 +212,12 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
       if (!mountedRef.current) return null;
       const aborted = controller.signal.aborted;
       const message = aborted ? `请求超时（${PROBE_TIMEOUT_MS / 1000}s）或已取消` : describeError(probeError);
-      const stage = aborted ? 'capabilities' : stageForError(probeError);
-      updateStage(stage, { status: 'fail', detail: message });
+      const failedStage = aborted ? 'capabilities' : stageForError(probeError);
+      failAt(failedStage, message);
+      // 401/403 说明能力请求本身被拒：能力探测也没拿到结论，单独标红而不是留空
+      if (failedStage === 'auth') {
+        updateStage('capabilities', { status: 'fail', detail: '鉴权失败，未能读取能力信息' });
+      }
       setError(message);
       return null;
     } finally {
@@ -204,7 +225,7 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
       if (mountedRef.current) setProbing(false);
       if (controllerRef.current === controller) controllerRef.current = null;
     }
-  }, [allowHttp, apiKey, profilePath, service, updateStage, url]);
+  }, [allowHttp, apiKey, failAt, profilePath, service, updateStage, url]);
 
   const save = useCallback(async (): Promise<ServerConnection | null> => {
     setError(null);

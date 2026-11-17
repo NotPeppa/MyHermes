@@ -219,6 +219,14 @@ function AddServerForm({
   );
 }
 
+const STAGE_STATUS_LABEL: Record<DiagnosticStage['status'], string> = {
+  pending: '待检测',
+  running: '检测中',
+  ok: '通过',
+  fail: '失败',
+  skipped: '未执行',
+};
+
 function StageRow({ stage }: { stage: DiagnosticStage }) {
   const theme = useTheme();
   const tint =
@@ -230,7 +238,7 @@ function StageRow({ stage }: { stage: DiagnosticStage }) {
   return (
     <View
       accessible
-      accessibilityLabel={`${stage.label}，${stage.status === 'ok' ? '通过' : stage.status === 'fail' ? '失败' : stage.status === 'running' ? '检测中' : '待检测'}`}
+      accessibilityLabel={`${stage.label}，${STAGE_STATUS_LABEL[stage.status]}`}
       style={{ flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.sm }}
     >
       <View style={{ width: theme.icon.md, height: theme.icon.md, alignItems: 'center', justifyContent: 'center' }}>
