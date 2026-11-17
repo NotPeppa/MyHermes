@@ -12,7 +12,7 @@
     "test": "tsx --test tests/*.test.ts && npm run test:render",
     "mock": "tsx scripts/mock-server.ts",
     "e2e": "tsx scripts/e2e-check.ts",
-    "test:render": "tsx --tsconfig tests/tsconfig.render.json --test tests/render.test.tsx tests/p1-render.test.tsx tests/p1-images-render.test.tsx tests/p2-diff-render.test.tsx tests/p2-jobs-render.test.tsx tests/p2-conflict-render.test.tsx tests/android-intents-render.test.tsx"
+    "test:render": "tsx --tsconfig tests/tsconfig.render.json --test tests/render.test.tsx tests/p1-render.test.tsx tests/p1-images-render.test.tsx tests/p2-diff-render.test.tsx tests/p2-jobs-render.test.tsx tests/p2-conflict-render.test.tsx tests/android-intents-render.test.tsx tests/onboarding-diagnosis.test.tsx tests/chat-empty-state.test.tsx"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
