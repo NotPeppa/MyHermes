@@ -115,6 +115,23 @@ export default function SettingsScreen() {
           />
         </Section>
 
+        <Section title="任务与技能">
+          <ListRow
+            title="任务中心"
+            subtitle="定时与后台任务：立即运行、暂停/恢复、删除"
+            onPress={() => router.push('/(main)/jobs')}
+            accessibilityLabel="任务中心"
+            right={<Ionicons name="chevron-forward" size={theme.icon.sm} color={theme.colors.textMuted} />}
+          />
+          <ListRow
+            title="技能与工具集"
+            subtitle="只读查看服务器声明的 Skills 与 Toolsets"
+            onPress={() => router.push('/(main)/settings/skills')}
+            accessibilityLabel="技能与工具集"
+            right={<Ionicons name="chevron-forward" size={theme.icon.sm} color={theme.colors.textMuted} />}
+          />
+        </Section>
+
         <Section title="隐私与本地数据">
           <SwitchRow
             label="缓存会话与消息到本机"

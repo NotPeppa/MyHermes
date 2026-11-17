@@ -26,6 +26,34 @@ export interface Session {
   /** 分支来源会话（P1 Fork） */
   forkedFrom?: string;
 }
+/** P2 只读发现：GET /v1/skills、GET /v1/toolsets。 */
+export interface Skill {
+  name: string;
+  description?: string;
+  category?: string;
+}
+export interface Toolset {
+  name: string;
+  label?: string;
+  description?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  tools?: string[];
+}
+/**
+ * P2 定时/后台任务：/api/jobs。官方文档只给出端点与「prompt / schedule / skills /
+ * provider override / delivery target」这几个概念，未固定字段名，因此只映射已知字段，
+ * 其余一律忽略，不猜测结构。
+ */
+export interface Job {
+  id: string;
+  prompt?: string;
+  schedule?: string;
+  paused?: boolean;
+  lastStatus?: string;
+  lastRunAt?: number;
+}
+
 /** P1 模型选择：来自 GET /api/model/options 的扁平化条目。 */
 export interface ModelOption {
   id: string;

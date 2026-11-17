@@ -1,10 +1,10 @@
 import type { Repository, CredentialVault, ProbeResult } from '../domain/contracts';
-import type { ServerConnection, Session, Message, Run, ToolEvent, OutboundTurn, NetworkState, AgentEvent, ModelOption, SendOptions } from '../domain/models';
+import type { ServerConnection, Session, Message, Run, ToolEvent, OutboundTurn, NetworkState, AgentEvent, ModelOption, SendOptions, Skill, Toolset, Job } from '../domain/models';
 import { terminalStates } from '../domain/models';
 import { HermesError } from '../domain/errors';
 import { Transport, ProtocolError, type FetchLike } from '../api/transport';
 import { probe } from '../api/capability-probe';
-import { SessionsAdapter, RunsAdapter, CompatAdapter, ModelsAdapter } from '../adapters/hermes/client';
+import { SessionsAdapter, RunsAdapter, CompatAdapter, ModelsAdapter, SkillsAdapter, JobsAdapter } from '../adapters/hermes/client';
 import { buildCompatContent } from '../media/image';
 
 export interface RuntimeView {
@@ -68,7 +68,7 @@ export class HermesService {
     if (!key) throw new ProtocolError('auth', '请重新保存此服务器的密钥');
     this.refreshIfStale(server, key);
     const transport = new Transport(server.baseUrl, key, this.options.fetch, server.allowHttp);
-    return { server, sessions: new SessionsAdapter(transport, serverId), runs: new RunsAdapter(transport), compat: new CompatAdapter(transport), models: new ModelsAdapter(transport) };
+    return { server, sessions: new SessionsAdapter(transport, serverId), runs: new RunsAdapter(transport), compat: new CompatAdapter(transport), models: new ModelsAdapter(transport), skills: new SkillsAdapter(transport), jobs: new JobsAdapter(transport) };
   }
   /**
    * 能力缓存 15 分钟。过期时后台重探一次并落库，不阻塞当前请求；失败保留旧能力，
@@ -106,6 +106,29 @@ export class HermesService {
     const { server, models } = await this.clients(serverId);
     return server.capabilities.features.model_options ? models.options() : [];
   }
+  /** P2 只读发现：没有 skills_api 旗标就返回 []，且不向服务器发请求。 */
+  async listSkills(serverId: string): Promise<Skill[]> {
+    const { server, skills } = await this.clients(serverId);
+    return server.capabilities.features.skills_api ? skills.skills() : [];
+  }
+  async listToolsets(serverId: string): Promise<Toolset[]> {
+    const { server, skills } = await this.clients(serverId);
+    return server.capabilities.features.skills_api ? skills.toolsets() : [];
+  }
+  /** P2 任务管理：没有 jobs_admin 旗标就返回 []，且不向服务器发请求。 */
+  async listJobs(serverId: string): Promise<Job[]> {
+    const { server, jobs } = await this.clients(serverId);
+    return server.capabilities.features.jobs_admin ? jobs.list() : [];
+  }
+  private async jobCommand(serverId: string, jobId: string, action: 'pause' | 'resume' | 'run' | 'remove'): Promise<void> {
+    const { server, jobs } = await this.clients(serverId);
+    if (!server.capabilities.features.jobs_admin) throw new ProtocolError('protocol', '服务器未开放 Jobs 管理能力');
+    await jobs[action](jobId);
+  }
+  pauseJob(serverId: string, jobId: string): Promise<void> { return this.jobCommand(serverId, jobId, 'pause'); }
+  resumeJob(serverId: string, jobId: string): Promise<void> { return this.jobCommand(serverId, jobId, 'resume'); }
+  runJob(serverId: string, jobId: string): Promise<void> { return this.jobCommand(serverId, jobId, 'run'); }
+  deleteJob(serverId: string, jobId: string): Promise<void> { return this.jobCommand(serverId, jobId, 'remove'); }
   async forkSession(serverId: string, sessionId: string, title?: string): Promise<Session> {
     const { server, sessions } = await this.clients(serverId);
     if (!server.capabilities.features.session_fork) throw new ProtocolError('protocol', '服务器未声明会话分支能力');
@@ -358,6 +381,13 @@ export class HermesService {
     if (!confirmed || !clients.server.capabilities.features.run_unknown_resolution || current.status !== 'unknown' || !current.admissionId || current.executionGeneration === undefined) throw new ProtocolError('conflict', '此任务尚未满足人工确认 unknown 的条件');
     try { await clients.runs.control(runId, 'resolve-unknown', { admission_id: current.admissionId, execution_generation: current.executionGeneration }); }
     finally { await this.reconcile(current, clients.runs); }
+  }
+  /**
+   * 用户选择「以服务端为准」后清掉视图里的本地缓冲与错误提示。
+   * 只影响本地展示：不改变服务器状态，也不删账本记录；下次 recover 若仍不确定会再次提示。
+   */
+  acknowledge(serverId: string, sessionId: string): void {
+    this.patch(serverId, sessionId, { error: undefined, draft: '', commentary: [], submission: undefined });
   }
   /** Detach only cancels local network observation, never stops the server run. */
   detach(serverId: string, sessionId: string): void { this.streams.get(keyOf(serverId, sessionId))?.controller.abort(); }

@@ -1,0 +1,173 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { FlatList, RefreshControl, Text, View } from 'react-native';
+import type { Job } from '@/domain/models';
+import { useJobs } from '@/features/jobs/useJobs';
+import { ConfirmDialog } from '@/ui/dialogs';
+import { formatRelative } from '@/ui/format';
+import {
+  Banner,
+  Button,
+  EmptyState,
+  IconButton,
+  LoadingView,
+  Screen,
+  ScreenHeader,
+} from '@/ui/primitives';
+import { useTheme } from '@/ui/theme';
+
+const labelOf = (job: Job) => job.prompt?.trim() || job.id;
+
+export default function JobsScreen() {
+  const theme = useTheme();
+  const router = useRouter();
+  const jobs = useJobs();
+  const [deleteTarget, setDeleteTarget] = useState<Job | null>(null);
+
+  const header = <ScreenHeader title="任务中心" subtitle={jobs.server?.name} onBack={() => router.back()} />;
+
+  if (jobs.loading) {
+    return (
+      <Screen>
+        {header}
+        <LoadingView label="正在读取任务…" />
+      </Screen>
+    );
+  }
+
+  return (
+    <Screen>
+      {header}
+
+      {jobs.offline ? (
+        <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
+          <Banner tone="warn" title="连接中断" icon="cloud-offline-outline">
+            无法读取服务器上的任务，恢复网络后下拉刷新。
+          </Banner>
+        </View>
+      ) : null}
+      {jobs.error ? (
+        <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.md }}>
+          <Banner tone="error" title="操作失败" action={<Button label="重试" variant="ghost" onPress={() => void jobs.refresh()} />}>
+            {jobs.error}
+          </Banner>
+        </View>
+      ) : null}
+
+      {!jobs.server ? (
+        <EmptyState
+          icon="server-outline"
+          title="还没有实例"
+          message="先添加一个 Hermes 实例，才能查看它的定时任务。"
+          action={<Button label="添加实例" icon="add" onPress={() => router.push('/(onboarding)/add-server')} />}
+        />
+      ) : !jobs.canManage ? (
+        <EmptyState
+          icon="lock-closed-outline"
+          title="此服务器未开放 Jobs 管理"
+          message="当前实例的能力探测结果里没有 jobs_admin 旗标，因此不显示任务列表。升级 Hermes 或在设置里重新检测连接后再试。"
+        />
+      ) : (
+        <FlatList
+          data={jobs.jobs}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md, flexGrow: 1 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={jobs.refreshing}
+              onRefresh={() => void jobs.refresh()}
+              tintColor={theme.colors.accent}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="time-outline"
+              title="还没有任务"
+              message="这个实例上还没有定时或后台任务。任务需要在 Hermes 服务器上创建。"
+            />
+          }
+          renderItem={({ item }) => {
+            const label = labelOf(item);
+            const busy = jobs.busyJobId === item.id;
+            return (
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  borderRadius: theme.radius.md,
+                  backgroundColor: theme.colors.surface,
+                  padding: theme.space.md,
+                  gap: theme.space.xs,
+                }}
+              >
+                <Text
+                  numberOfLines={2}
+                  style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}
+                >
+                  {label}
+                </Text>
+                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
+                  {`调度：${item.schedule ?? '未声明'}`}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs }}>
+                  <Ionicons
+                    name={item.paused ? 'pause-circle-outline' : 'play-circle-outline'}
+                    size={theme.icon.sm}
+                    color={item.paused ? theme.colors.warning : theme.colors.success}
+                  />
+                  <Text style={{ color: item.paused ? theme.colors.warning : theme.colors.success, fontSize: theme.font.caption, fontWeight: '600' }}>
+                    {item.paused ? '已暂停' : '启用中'}
+                  </Text>
+                </View>
+                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
+                  {`上次运行：${item.lastStatus ?? '未知'}${
+                    item.lastRunAt ? ` · ${formatRelative(item.lastRunAt)}` : ''
+                  }`}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs }}>
+                  <IconButton
+                    name="flash-outline"
+                    accessibilityLabel={`立即运行任务 ${label}`}
+                    accessibilityHint="让服务器马上执行一次此任务"
+                    disabled={busy}
+                    onPress={() => void jobs.run(item.id)}
+                  />
+                  <IconButton
+                    name={item.paused ? 'play-outline' : 'pause-outline'}
+                    accessibilityLabel={item.paused ? `恢复任务 ${label}` : `暂停任务 ${label}`}
+                    accessibilityHint={item.paused ? '恢复调度' : '停止按计划执行'}
+                    disabled={busy}
+                    onPress={() => void jobs.togglePause(item)}
+                  />
+                  <IconButton
+                    name="trash-outline"
+                    accessibilityLabel={`删除任务 ${label}`}
+                    accessibilityHint="从服务器删除此任务，需二次确认"
+                    color={theme.colors.danger}
+                    disabled={busy}
+                    onPress={() => setDeleteTarget(item)}
+                  />
+                </View>
+              </View>
+            );
+          }}
+        />
+      )}
+
+      <ConfirmDialog
+        visible={deleteTarget !== null}
+        title="删除任务"
+        message={`会调用 Hermes 服务器删除任务「${deleteTarget ? labelOf(deleteTarget) : ''}」。此操作不可撤销，服务器返回失败时任务保持不变。`}
+        confirmLabel="删除任务"
+        destructive
+        busy={jobs.busyJobId !== null}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) void jobs.remove(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+      />
+    </Screen>
+  );
+}

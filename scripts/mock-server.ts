@@ -29,6 +29,36 @@ const messages = new Map<string, { role: string; content: string; created_at: nu
 const runs = new Map<string, Run>();
 const idempotency = new Map<string, string>();
 
+interface Job {
+  id: string;
+  profile: string;
+  prompt: string;
+  schedule: string;
+  skills: string[];
+  provider: string;
+  delivery_target: string;
+  paused: boolean;
+  last_status: string;
+  last_run_at: number;
+}
+const jobs = new Map<string, Job>();
+/** 预置几条真实感任务，让 GET /api/jobs 一上手就有内容。 */
+for (const [profile, prompt, schedule, paused] of [
+  ['alpha', '每天早上汇总服务器磁盘与容器状态，异常时发到 Telegram', '0 8 * * *', false],
+  ['alpha', '每周一整理上周未完成的任务清单并生成摘要', '0 9 * * 1', true],
+  ['beta', '每小时检查备份任务结果，失败就重试一次', '0 * * * *', false],
+] as const) {
+  const id = `job_${profile}_${jobs.size + 1}`;
+  jobs.set(`${profile}:${id}`, {
+    id, profile, prompt, schedule, skills: ['terminal', 'filesystem'], provider: 'nous', delivery_target: 'telegram',
+    paused, last_status: paused ? 'paused' : 'completed', last_run_at: Date.now() - (jobs.size + 1) * 3_600_000,
+  });
+}
+const jobView = (job: Job) => ({
+  id: job.id, prompt: job.prompt, schedule: job.schedule, skills: job.skills, provider: job.provider,
+  delivery_target: job.delivery_target, paused: job.paused, last_status: job.last_status, last_run_at: job.last_run_at,
+});
+
 const json = (res: ServerResponse, code: number, body: unknown, headers: Record<string, string> = {}) => {
   const payload = JSON.stringify(body);
   res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), ...headers });
@@ -139,6 +169,8 @@ export const server = createServer(async (req, res) => {
         session_fork: true,
         model_options: true,
         tool_progress_events: true,
+        skills_api: true,
+        jobs_admin: true,
       },
     });
   }
@@ -168,6 +200,75 @@ export const server = createServer(async (req, res) => {
         },
       ],
     });
+  }
+  if (path === '/v1/skills' && method === 'GET') {
+    if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
+    return json(res, 200, [
+      { name: 'disk-triage', description: '按顺序检查磁盘、inode 与容器日志，给出可执行结论', category: 'ops' },
+      { name: 'release-notes', description: '从 git 历史整理发布说明，按影响面分组', category: 'writing' },
+      { name: 'sql-review', description: '审查 SQL 的索引使用与锁范围，标注风险点', category: 'code' },
+    ]);
+  }
+  if (path === '/v1/toolsets' && method === 'GET') {
+    if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
+    return json(res, 200, [
+      { name: 'terminal', label: '终端', description: '在服务器上执行 shell 命令', enabled: true, configured: true, tools: ['run_command', 'read_output', 'kill_process'] },
+      { name: 'filesystem', label: '文件系统', description: '读写服务器文件', enabled: true, configured: true, tools: ['read_file', 'write_file', 'list_dir'] },
+      { name: 'web', label: '网页', description: '抓取与搜索网页内容', enabled: false, configured: false, tools: ['fetch_url', 'search'] },
+      { name: 'memory', label: '记忆', description: '长期记忆读写', enabled: true, configured: false, tools: [] },
+    ]);
+  }
+  if (path === '/api/jobs' && method === 'GET') {
+    if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
+    if (profile === 'fault') return json(res, 503, { error: 'draining' }, { 'retry-after': '2' });
+    const list = [...jobs.values()].filter((job) => job.profile === profile).sort((a, b) => b.last_run_at - a.last_run_at);
+    return json(res, 200, { jobs: list.map(jobView), total: list.length });
+  }
+  if (path === '/api/jobs' && method === 'POST') {
+    if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
+    if (profile === 'fault') return json(res, 503, { error: 'draining' }, { 'retry-after': '2' });
+    const payload = await body(req);
+    const id = `job_${randomUUID().slice(0, 8)}`;
+    const job: Job = {
+      id, profile, prompt: String(payload.prompt ?? ''), schedule: String(payload.schedule ?? 'manual'),
+      skills: Array.isArray(payload.skills) ? payload.skills.map(String) : [], provider: String(payload.provider ?? 'default'),
+      delivery_target: String(payload.delivery_target ?? 'none'), paused: false, last_status: 'never', last_run_at: Date.now(),
+    };
+    jobs.set(`${profile}:${id}`, job);
+    return json(res, 201, { job: jobView(job) });
+  }
+  const jobMatch = /^\/api\/jobs\/([^/]+)(\/pause|\/resume|\/run)?$/.exec(path);
+  if (jobMatch) {
+    if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
+    if (profile === 'fault') return json(res, 503, { error: 'draining' }, { 'retry-after': '2' });
+    const key = `${profile}:${jobMatch[1]}`;
+    const job = jobs.get(key);
+    if (!job) return json(res, 404, { error: 'not_found' });
+    const sub = jobMatch[2];
+    if (!sub && method === 'GET') return json(res, 200, { job: jobView(job) });
+    if (!sub && method === 'PATCH') {
+      const payload = await body(req);
+      if (typeof payload.prompt === 'string') job.prompt = payload.prompt;
+      if (typeof payload.schedule === 'string') job.schedule = payload.schedule;
+      if (typeof payload.paused === 'boolean') job.paused = payload.paused;
+      return json(res, 200, { job: jobView(job) });
+    }
+    if (!sub && method === 'DELETE') {
+      jobs.delete(key);
+      return json(res, 200, { deleted: true, job_id: job.id });
+    }
+    if (sub === '/pause' && method === 'POST') {
+      job.paused = true; job.last_status = 'paused';
+      return json(res, 200, { job_id: job.id, paused: true });
+    }
+    if (sub === '/resume' && method === 'POST') {
+      job.paused = false; job.last_status = 'resumed';
+      return json(res, 200, { job_id: job.id, paused: false });
+    }
+    if (sub === '/run' && method === 'POST') {
+      job.last_status = 'started'; job.last_run_at = Date.now();
+      return json(res, 202, { status: 'started', job_id: job.id });
+    }
   }
   if (path === '/api/sessions' && method === 'GET') {
     if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
