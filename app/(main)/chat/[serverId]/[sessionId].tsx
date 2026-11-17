@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -16,10 +16,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ImageAttachment, Message, ModelOption, PendingControl, Run, ToolEvent } from '@/domain/models';
 import { useAppServices } from '@/composition';
 import { formatBytes, MAX_IMAGES } from '@/media/image';
+import { buildConflict } from '@/features/chat/conflict';
 import { useChat } from '@/features/chat/useChat';
+import { takePendingIntent } from '@/features/intents/pending';
 import { describeError } from '@/features/common/errors';
 import { canStopRun, isActiveRun, runStateTone, statusText } from '@/features/common/status';
 import { ActionSheet, ControlSheet, DetailsSheet, Sheet } from '@/ui/dialogs';
+import { ConflictSheet } from '@/ui/conflict-sheet';
 import { copyText } from '@/ui/clipboard';
 import { formatTime } from '@/ui/format';
 import { DraftMessage, MessageItem } from '@/ui/message-item';
@@ -63,6 +66,8 @@ export default function ChatScreen() {
   const [detailsTarget, setDetailsTarget] = useState<Message | null>(null);
   const [unknownTarget, setUnknownTarget] = useState<Run | null>(null);
   const [dismissedControl, setDismissedControl] = useState<string | null>(null);
+  // P2 同步冲突：弹层开关
+  const [conflictOpen, setConflictOpen] = useState(false);
   // P1 图片附件：只有 openai_compat 模式声明了图片输入，其它模式不显示入口
   const [imagesEnabled, setImagesEnabled] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -127,6 +132,10 @@ export default function ChatScreen() {
     return null;
   }, [chat.view.submission, latestRun]);
 
+  // P2 同步冲突：409 或「可能已提交且服务端已有回复」时生成对照模型
+  const conflict = useMemo(() => buildConflict(chat.view), [chat.view]);
+  const lastServerMessage = chat.view.messages[chat.view.messages.length - 1];
+
   const pendingControl = useMemo<PendingControl | null>(() => {
     for (const run of chat.view.runs) {
       const control = run.pendingControls?.[0];
@@ -177,6 +186,33 @@ export default function ChatScreen() {
 
   const atLimit = images.length >= MAX_IMAGES;
   const canSend = (input.trim().length > 0 || images.length > 0) && !sending;
+
+  // 外部入口（深链 / 分享 / 剪贴板）留下的内容：只预填，不自动发送
+  const consumePending = useCallback(async () => {
+    const pending = takePendingIntent();
+    if (!pending) return;
+    if (pending.text) setInput((current) => (current.length > 0 ? current : pending.text ?? ''));
+    if (!pending.imageUri) return;
+    try {
+      const { processImage } = await import('@/media/picker');
+      const result = await processImage({ uri: pending.imageUri }, 0);
+      if (result.kind === 'picked') setImages((prev) => [...prev, result.attachment]);
+      else if (result.kind !== 'cancelled') setAttachNotice({ tone: 'warn', text: result.message });
+    } catch (error_) {
+      setAttachNotice({ tone: 'error', text: describeError(error_) });
+    }
+  }, []);
+
+  // 挂载即消费一次（深链直接进聊天页），聚焦再消费一次（已在聊天页时收到分享）
+  useEffect(() => {
+    void consumePending();
+  }, [consumePending]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void consumePending();
+    }, [consumePending]),
+  );
 
   const onPick = async () => {
     if (picking || atLimit) return;
@@ -288,13 +324,32 @@ export default function ChatScreen() {
             </Banner>
           ) : null}
 
-          {chat.view.error ? (
+          {conflict && !conflictOpen ? (
+            <Banner
+              tone="warn"
+              title={conflict.reason === 'server_conflict' ? '本地与服务端不一致' : '可能已提交，需要核对'}
+              action={
+                <Button
+                  label="查看差异"
+                  variant="secondary"
+                  onPress={() => setConflictOpen(true)}
+                  accessibilityHint="对照本地未确认内容与服务端最新历史，决定保留哪一边"
+                />
+              }
+            >
+              {conflict.reason === 'server_conflict'
+                ? '服务端拒绝了这次操作（409），本地与服务端的会话状态不一致。'
+                : '上次提交没有拿到确认，但服务端已有新的回复，可能已经执行。'}
+            </Banner>
+          ) : null}
+
+          {!conflict && chat.view.error ? (
             <Banner tone="error" title="服务层错误">
               {describeError(chat.view.error)}
             </Banner>
           ) : null}
 
-          {chat.error ? (
+          {chat.error && !conflictOpen ? (
             <Banner
               tone="error"
               title="操作失败"
@@ -320,7 +375,7 @@ export default function ChatScreen() {
             </Banner>
           ) : null}
 
-          {uncertain ? (
+          {uncertain && !conflict ? (
             <Banner
               tone="warn"
               title="可能已提交"
@@ -624,6 +679,25 @@ export default function ChatScreen() {
             </View>
           ) : null}
         </Sheet>
+      ) : null}
+
+      {conflict && conflictOpen ? (
+        <ConflictSheet
+          conflict={conflict}
+          serverAt={lastServerMessage?.createdAt}
+          busy={chat.busy === 'retry' || chat.busy === 'recover'}
+          error={chat.error}
+          onReload={() => {
+            setConflictOpen(false);
+            // 服务层清掉本地草稿/错误提示，再以服务端历史为准重拉
+            service.acknowledge(serverId, sessionId);
+            void chat.refresh();
+          }}
+          onRetry={() => {
+            if (uncertain) void chat.retry(uncertain.clientTurnId);
+          }}
+          onDismiss={() => setConflictOpen(false)}
+        />
       ) : null}
 
       <ControlSheet

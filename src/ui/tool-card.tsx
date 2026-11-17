@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import type { ToolEvent } from '@/domain/models';
 import { copyText } from './clipboard';
+import { parseDiff } from './diff';
+import { DiffView } from './diff-view';
 import { formatTime } from './format';
 import { useTheme } from './theme';
 
@@ -19,6 +21,8 @@ export function toolEventLabel(eventType: string): string {
 export function ToolCard({ event }: { event: ToolEvent }) {
   const theme = useTheme();
   const [expanded, setExpanded] = useState(false);
+  // P2：识别统一 diff 就结构化渲染，识别失败保持纯文本（服务端契约不变）
+  const diff = useMemo(() => (event.preview ? parseDiff(event.preview) : null), [event.preview]);
   const failed = event.eventType === 'failed';
   const tint = failed ? theme.colors.danger : theme.colors.textMuted;
   return (
@@ -90,17 +94,21 @@ export function ToolCard({ event }: { event: ToolEvent }) {
             </Pressable>
           </View>
           <ScrollView contentContainerStyle={{ padding: theme.space.md, paddingTop: 0 }}>
-            <Text
-              selectable
-              style={{
-                fontFamily: theme.fontFamily.mono,
-                fontSize: theme.font.code,
-                lineHeight: theme.font.code * 1.5,
-                color: theme.colors.textMuted,
-              }}
-            >
-              {event.preview ?? '无输出预览'}
-            </Text>
+            {diff ? (
+              <DiffView files={diff} />
+            ) : (
+              <Text
+                selectable
+                style={{
+                  fontFamily: theme.fontFamily.mono,
+                  fontSize: theme.font.code,
+                  lineHeight: theme.font.code * 1.5,
+                  color: theme.colors.textMuted,
+                }}
+              >
+                {event.preview ?? '无输出预览'}
+              </Text>
+            )}
           </ScrollView>
         </View>
       ) : null}
