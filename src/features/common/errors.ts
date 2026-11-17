@@ -7,6 +7,7 @@ const MESSAGES: Record<HermesErrorCode, string> = {
   conflict: '状态已变化（409）：已刷新最新状态，请重新确认',
   rate_limited: '请求过于频繁（429）：请稍后重试',
   unavailable: '服务器不可用（503）：请稍后重试',
+  server_error: '服务器内部错误：请稍后重试，或查看 Hermes 服务端日志',
   tls: 'TLS 证书校验失败：已拒绝连接，请检查证书与域名',
   network: '网络不可达：检查网络与服务器地址',
   protocol: '响应格式不符合预期：可能是版本或 Profile 不匹配',
@@ -17,7 +18,10 @@ const MESSAGES: Record<HermesErrorCode, string> = {
 export function describeError(error: unknown): string {
   if (error instanceof HermesError) {
     const base = MESSAGES[error.code] ?? error.message;
-    return error.retryAfter ? `${base}（建议 ${error.retryAfter} 后重试）` : base;
+    // HTTP 错误附带「方法 路径 → 状态」，否则用户只能看到笼统的 404/403
+    const detail = error.status !== undefined && error.message ? `｜${error.message}` : '';
+    const retry = error.retryAfter ? `（建议 ${error.retryAfter} 后重试）` : '';
+    return `${base}${detail}${retry}`;
   }
   if (error instanceof Error) return error.message;
   return '发生未知错误';
