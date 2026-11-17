@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "paths": {
+      "@/*": ["../src/*"],
+      "react-native": ["./stubs/react-native.tsx"],
+      "react-native-safe-area-context": ["./stubs/expo-modules.tsx"],
+      "expo-router": ["./stubs/expo-router.tsx"],
+      "expo-constants": ["./stubs/expo-modules.tsx"],
+      "expo-status-bar": ["./stubs/expo-modules.tsx"],
+      "expo-secure-store": ["./stubs/expo-modules.tsx"],
+      "@expo/vector-icons": ["./stubs/expo-modules.tsx"]
+    }
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "../src/**/*.ts", "../src/**/*.tsx", "../app/**/*.tsx"]
+}
