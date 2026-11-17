@@ -94,7 +94,7 @@ const fakeFetch = async (url: string) => {
   return json({});
 };
 
-function install(features: Record<string, boolean>) {
+function install(features: Record<string, boolean>, options: { missingEndpoints?: boolean } = {}) {
   const calls: { url: string; method: string }[] = [];
   const repository = memoryRepository(makeServer(features));
   const service = new HermesService({
@@ -102,6 +102,10 @@ function install(features: Record<string, boolean>) {
     vault,
     fetch: (async (url: string, init?: RequestInit) => {
       calls.push({ url, method: init?.method ?? 'GET' });
+      // 旗标缺失时客户端会实际探端点；用 404 表示服务器确实没有这些接口
+      if (options.missingEndpoints && (url.endsWith('/v1/skills') || url.includes('/api/jobs'))) {
+        return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+      }
       return fakeFetch(url);
     }) as never,
   });
@@ -216,8 +220,8 @@ test('删除需二次确认：确认后才 DELETE', async () => {
   await act(async () => tree.unmount());
 });
 
-test('jobs_admin 缺失时任务中心显示说明而不是空列表', async () => {
-  install({});
+test('端点不存在时任务中心显示说明而不是空列表', async () => {
+  install({}, { missingEndpoints: true });
   const tree = await render(createElement(JobsScreen));
   const body = textOf(tree.toJSON());
   assert.match(body, /此服务器未开放 Jobs 管理/);
@@ -248,11 +252,34 @@ test('skills_api 存在时技能页渲染技能与工具集条目', async () => 
   await act(async () => tree.unmount());
 });
 
-test('skills_api 缺失时技能页显示说明', async () => {
-  install({});
+test('端点不存在时技能页显示说明', async () => {
+  install({}, { missingEndpoints: true });
   const tree = await render(createElement(SkillsScreen));
   const body = textOf(tree.toJSON());
   assert.match(body, /此服务器未开放 Skills 接口/);
   assert.doesNotMatch(body, /disk-triage/);
+  await act(async () => tree.unmount());
+});
+
+test('skills 500 但 toolsets 正常：分别提示并照常显示工具集', async () => {
+  const repository = memoryRepository(makeServer({ skills_api: true }));
+  const service = new HermesService({
+    repository,
+    vault,
+    fetch: (async (url: string) => {
+      if (url.endsWith('/v1/skills')) {
+        return new Response(JSON.stringify({ error: { message: 'Failed to enumerate skills' } }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+      return json([{ name: 'terminal', label: '终端', enabled: true, configured: true, tools: ['run_command'] }]);
+    }) as never,
+  });
+  configureAppServices({ repository, vault, service });
+
+  const tree = await render(createElement(SkillsScreen));
+  const body = textOf(tree.toJSON());
+  assert.match(body, /技能列表读取失败/);
+  assert.match(body, /Failed to enumerate skills/, '横幅里要显示服务端原因');
+  assert.match(body, /工具集仍然可用/);
+  assert.match(body, /terminal/, '工具集条目应照常渲染');
   await act(async () => tree.unmount());
 });

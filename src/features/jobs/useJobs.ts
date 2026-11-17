@@ -21,7 +21,8 @@ export interface JobsState {
   remove: (jobId: string) => Promise<void>;
 }
 
-const offlineCodes = new Set(['network', 'unavailable', 'timeout']);
+// 只有真正的网络问题才算「连接中断」；5xx 属于服务器错误，要显示具体状态
+const offlineCodes = new Set(['network', 'timeout']);
 
 /** 任务中心：只读列表 + 立即运行 / 暂停恢复 / 删除，全部以服务器为准，不做本地乐观状态。 */
 export function useJobs(): JobsState {
@@ -32,6 +33,7 @@ export function useJobs(): JobsState {
   const [refreshing, setRefreshing] = useState(false);
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [canManage, setCanManage] = useState(false);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const serverIdRef = useRef<string | null>(null);
 
@@ -71,11 +73,21 @@ export function useJobs(): JobsState {
         if (!alive) return;
         serverIdRef.current = active?.id ?? null;
         setServer(active);
-        if (!active?.capabilities.features.jobs_admin) {
+        // 旗标只是提示：缺失时由服务层实际探一次 /api/jobs 再决定
+        if (!active) {
           setJobs([]);
           setLoading(false);
           return;
         }
+        if (!(await service.canManageJobs(active.id))) {
+          if (!alive) return;
+          setCanManage(false);
+          setJobs([]);
+          setLoading(false);
+          return;
+        }
+        if (!alive) return;
+        setCanManage(true);
         await load('initial');
       } catch (loadError) {
         if (!alive) return;
@@ -86,7 +98,7 @@ export function useJobs(): JobsState {
     return () => {
       alive = false;
     };
-  }, [load, repository]);
+  }, [load, repository, service]);
 
   const command = useCallback(
     async (jobId: string, action: 'pause' | 'resume' | 'run' | 'delete') => {
@@ -112,7 +124,7 @@ export function useJobs(): JobsState {
 
   return {
     server,
-    canManage: server?.capabilities.features.jobs_admin === true,
+    canManage,
     jobs,
     loading,
     refreshing,

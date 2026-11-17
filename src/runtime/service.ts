@@ -106,23 +106,67 @@ export class HermesService {
     const { server, models } = await this.clients(serverId);
     return server.capabilities.features.model_options ? models.options() : [];
   }
-  /** P2 只读发现：没有 skills_api 旗标就返回 []，且不向服务器发请求。 */
-  async listSkills(serverId: string): Promise<Skill[]> {
+  /**
+   * 不同 Hermes 版本对同一能力用过不同旗标名（例如 run_approval 与 run_approval_response、
+   * jobs_admin 与 jobs_api），任一命中即视为支持；全都没有才判定为不支持。
+   */
+  private featureOn(server: ServerConnection, ...names: string[]): boolean {
+    const features = server.capabilities.features;
+    return names.some(name => features[name] === true);
+  }
+  /**
+   * 旗标只是提示，端点才是事实：有些版本（实测 0.22.5）提供 /api/jobs 与 /v1/skills
+   * 却没在 capabilities 里广告对应旗标。旗标缺失时实际探一次并记住结论，
+   * 只有明确 404/403/405 才判定为不支持。
+   */
+  private unsupported = new Map<string, boolean>();
+  private async probeSupport(serverId: string, capability: 'skills' | 'jobs', attempt: () => Promise<unknown>): Promise<boolean> {
+    const cacheKey = `${serverId}:${capability}`;
+    const cached = this.unsupported.get(cacheKey);
+    if (cached === true) return false;
+    try {
+      await attempt();
+      this.unsupported.delete(cacheKey);
+      return true;
+    } catch (error) {
+      const code = errorOf(error).code;
+      if (code === 'not_found' || code === 'forbidden' || code === 'protocol') {
+        this.unsupported.set(cacheKey, true);
+        return false;
+      }
+      throw error;
+    }
+  }
+  async canReadSkills(serverId: string): Promise<boolean> {
     const { server, skills } = await this.clients(serverId);
-    return server.capabilities.features.skills_api ? skills.skills() : [];
+    if (this.featureOn(server, 'skills_api', 'skills')) return true;
+    return this.probeSupport(serverId, 'skills', () => skills.skills());
+  }
+  async canManageJobs(serverId: string): Promise<boolean> {
+    const { server, jobs } = await this.clients(serverId);
+    if (this.featureOn(server, 'jobs_admin', 'jobs_api', 'jobs')) return true;
+    return this.probeSupport(serverId, 'jobs', () => jobs.list());
+  }
+  /** P2 只读发现：旗标缺失时也尝试一次，端点不存在才返回 []。 */
+  async listSkills(serverId: string): Promise<Skill[]> {
+    const { skills } = await this.clients(serverId);
+    if (!(await this.canReadSkills(serverId))) return [];
+    return skills.skills();
   }
   async listToolsets(serverId: string): Promise<Toolset[]> {
-    const { server, skills } = await this.clients(serverId);
-    return server.capabilities.features.skills_api ? skills.toolsets() : [];
+    const { skills } = await this.clients(serverId);
+    if (!(await this.canReadSkills(serverId))) return [];
+    return skills.toolsets();
   }
-  /** P2 任务管理：没有 jobs_admin 旗标就返回 []，且不向服务器发请求。 */
+  /** P2 任务管理：旗标缺失时也尝试一次，端点不存在才返回 []。 */
   async listJobs(serverId: string): Promise<Job[]> {
-    const { server, jobs } = await this.clients(serverId);
-    return server.capabilities.features.jobs_admin ? jobs.list() : [];
+    const { jobs } = await this.clients(serverId);
+    if (!(await this.canManageJobs(serverId))) return [];
+    return jobs.list();
   }
   private async jobCommand(serverId: string, jobId: string, action: 'pause' | 'resume' | 'run' | 'remove'): Promise<void> {
-    const { server, jobs } = await this.clients(serverId);
-    if (!server.capabilities.features.jobs_admin) throw new ProtocolError('protocol', '服务器未开放 Jobs 管理能力');
+    const { jobs } = await this.clients(serverId);
+    if (!(await this.canManageJobs(serverId))) throw new ProtocolError('protocol', '服务器未开放 Jobs 管理能力');
     await jobs[action](jobId);
   }
   pauseJob(serverId: string, jobId: string): Promise<void> { return this.jobCommand(serverId, jobId, 'pause'); }
@@ -369,8 +413,10 @@ export class HermesService {
     const control = current.pendingControls?.find(c => c.request_id === requestId);
     if (!control) throw new ProtocolError('conflict', '待处理请求已过期，请刷新');
     const clarify = /clarif/.test(control.type);
-    const flags = clients.server.capabilities.features;
-    if (!(clarify ? flags.run_clarify || flags.run_clarification : flags.run_approval)) throw new ProtocolError('protocol', '服务器未声明此控制能力');
+    const supported = clarify
+      ? this.featureOn(clients.server, 'run_clarify', 'run_clarification', 'run_clarify_response')
+      : this.featureOn(clients.server, 'run_approval', 'run_approval_response', 'approval_events');
+    if (!supported) throw new ProtocolError('protocol', '服务器未声明此控制能力');
     if (!clarify && (!control.choices?.includes(value) && !['once', 'deny'].includes(value))) throw new ProtocolError('protocol', '审批选项无效');
     try { await clients.runs.control(runId, clarify ? 'clarify' : 'approval', { request_id: control.request_id, execution_generation: control.execution_generation, [clarify ? 'answer' : 'choice']: value }); }
     finally { await this.reconcile(current, clients.runs); }

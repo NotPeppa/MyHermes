@@ -43,10 +43,19 @@ function memory(features: Record<string, boolean> = {}, mode: HermesMode = 'nati
   return { repo, server, fault };
 }
 
-test('无 skills_api / jobs_admin 时返回 [] 且不发任何请求', async () => {
+test('无 skills_api / jobs_admin 且端点 404 时返回 []，且只探一次', async () => {
   const { repo } = memory();
-  let calls = 0;
-  const service = new HermesService({ repository: repo, vault, now: () => 1, fetch: async () => { calls++; return json({}); } });
+  const urls: string[] = [];
+  // 旗标只是提示：缺失时实际探一次端点，404 才判定不支持
+  const service = new HermesService({
+    repository: repo,
+    vault,
+    now: () => 1,
+    fetch: async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    },
+  });
   assert.deepEqual(await service.listSkills('a'), []);
   assert.deepEqual(await service.listToolsets('a'), []);
   assert.deepEqual(await service.listJobs('a'), []);
@@ -58,7 +67,9 @@ test('无 skills_api / jobs_admin 时返回 [] 且不发任何请求', async () 
   ]) {
     await assert.rejects(run(), (error: HermesError) => error.code === 'protocol');
   }
-  assert.equal(calls, 0);
+  // 探测结论会缓存：skills 与 jobs 各只探一次，四个命令不再发请求
+  assert.equal(urls.filter((url) => url.includes('/v1/skills')).length, 1, `实际请求：${urls.join(', ')}`);
+  assert.equal(urls.filter((url) => url.includes('/api/jobs')).length, 1, `实际请求：${urls.join(', ')}`);
   await service.dispose();
 });
 

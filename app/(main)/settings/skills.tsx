@@ -54,6 +54,30 @@ export default function SkillsScreen() {
           无法读取服务器上的技能与工具集。
         </Banner>
       ) : null}
+      {skills.skillsError ? (
+        <Banner
+          tone="error"
+          title="技能列表读取失败"
+          action={<Button label="重试" variant="ghost" onPress={() => void skills.refresh()} />}
+        >
+          <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, lineHeight: theme.font.body * 1.5 }}>
+            {skills.skillsError}
+            {skills.toolsets.length > 0 ? '\n工具集仍然可用，已照常显示。' : ''}
+          </Text>
+        </Banner>
+      ) : null}
+      {skills.toolsetsError ? (
+        <Banner
+          tone="error"
+          title="工具集读取失败"
+          action={<Button label="重试" variant="ghost" onPress={() => void skills.refresh()} />}
+        >
+          <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, lineHeight: theme.font.body * 1.5 }}>
+            {skills.toolsetsError}
+            {skills.skills.length > 0 ? '\n技能列表仍然可用，已照常显示。' : ''}
+          </Text>
+        </Banner>
+      ) : null}
       {skills.error ? (
         <Banner
           tone="error"
@@ -104,8 +128,12 @@ export default function SkillsScreen() {
         ListEmptyComponent={
           <EmptyState
             icon="construct-outline"
-            title="没有声明技能或工具集"
-            message="此实例的 /v1/skills 与 /v1/toolsets 都返回空列表。"
+            title={skills.skillsError || skills.toolsetsError ? '没有可显示的条目' : '没有声明技能或工具集'}
+            message={
+              skills.skillsError || skills.toolsetsError
+                ? '读取失败的接口见上方提示；可以点「重试」，或先看服务器端日志。'
+                : '此实例的 /v1/skills 与 /v1/toolsets 都返回空列表。'
+            }
           />
         }
         renderItem={({ item }) => {

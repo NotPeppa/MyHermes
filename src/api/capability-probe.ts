@@ -23,7 +23,14 @@ export async function probe(baseUrl: string, key: string, options: { allowHttp?:
   }
   const endpoint = (path: string): boolean => Array.isArray(endpoints) ? endpoints.some((v: any) => v === path || v?.path === path) : endpoints[path] === true || typeof endpoints[path] === 'object' && endpoints[path] !== null;
   // Explicit feature flags win; endpoint declarations can fill missing flags, never override false.
-  const aliases: Record<string, string> = { run_submission: '/v1/runs', run_status: '/v1/runs/{id}', run_events_sse: '/v1/runs/{id}/events', sessions_list: '/api/sessions', session_messages: '/api/sessions/{id}/messages', session_chat_stream: '/api/sessions/{id}/chat/stream', session_fork: '/api/sessions/{id}/fork', model_options: '/api/model/options', chat_completions: '/v1/chat/completions' };
+  const aliases: Record<string, string> = {
+    run_submission: '/v1/runs', run_status: '/v1/runs/{id}', run_events_sse: '/v1/runs/{id}/events',
+    run_stop: '/v1/runs/{id}/stop', run_approval: '/v1/runs/{id}/approval', run_clarify: '/v1/runs/{id}/clarify',
+    sessions_list: '/api/sessions', session_messages: '/api/sessions/{id}/messages',
+    session_chat_stream: '/api/sessions/{id}/chat/stream', session_fork: '/api/sessions/{id}/fork',
+    model_options: '/api/model/options', chat_completions: '/v1/chat/completions',
+    skills_api: '/v1/skills', jobs_admin: '/api/jobs',
+  };
   for (const [name, path] of Object.entries(aliases)) if (!(name in features) && endpoint(path)) features[name] = true;
   const runs = ['run_submission', 'run_status', 'run_events_sse'].every(name => features[name]);
   const sessions = !!(features.sessions_list && features.session_messages && features.session_chat_stream);
