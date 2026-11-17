@@ -12,6 +12,8 @@
 | `sessions` | 会话列表、历史、更名、删除 | 仅本地缓存视图 |
 | `session_fork` | 长按菜单显示「分支会话」 | 隐藏分支入口 |
 | `model_options` | 聊天页显示模型选择 chip，按请求下发 `model`/`provider` | 不显示模型入口，使用服务器默认模型 |
+| `skills_api` | 设置页可浏览 Skills 与 Toolsets | 页面显示「未开放」说明，不发请求 |
+| `jobs_admin` | 任务中心可暂停/恢复/立即运行/删除 | 页面显示「未开放」说明，不发请求 |
 | `chat_completions` | Compat 模式单轮流，无恢复保证 | 模式判定为 `unsupported` |
 
 ## 端点使用
@@ -29,6 +31,8 @@
 | 兼容 | `POST /v1/chat/completions` | OpenAI 格式，无幂等保证 |
 | 分支 | `POST /api/sessions/{id}/fork` | P1，需 `session_fork` |
 | 模型 | `GET /api/model/options` | P1，需 `model_options`；结果扁平化为 provider+model |
+| 技能 | `GET /v1/skills`、`GET /v1/toolsets` | P2，只读 |
+| 任务 | `/api/jobs` 及 `/{id}/pause`、`/resume`、`/run`、`DELETE /{id}` | P2，需 `jobs_admin` |
 
 ## SSE 归一化
 
@@ -65,6 +69,25 @@
 客户端处理：相册选择 → 长边限制 1568px → JPEG 重编码（丢弃 EXIF/定位）→ 单张 ≤3MB、最多 4 张 → data URI。非图片 `data:` 会被服务器以 `400 unsupported_content_type` 拒绝，客户端在本地先拦。
 
 会话单轮字段按官方示例使用 `input`（不是 `message`）。
+
+## P2 行为说明
+
+- **Skills / Toolsets**：只读列表。`/v1/skills` 返回 `name/description/category`，`/v1/toolsets` 返回 `name/label/description/enabled/configured/tools`；结构不认识时返回空数组，不报错。
+- **Jobs**：官方文档只给出端点与「prompt / schedule / skills / provider / delivery target」概念，**未固定字段名**。客户端只映射 `id`、`prompt`、`schedule`、`paused`、`last_status`、`last_run_at`，其余忽略；删除前二次确认；`run` 立即返回 `started`，不代表任务已完成。
+- **结构化 diff**：客户端在工具预览里识别 unified diff 并渲染增删着色；识别失败回退纯文本。单次渲染上限 200 行，输入超过 20k 字符先截断。
+- **冲突可视化**：`409` 或「可能已提交」时并排展示本地未确认内容与服务端最新历史，提供「以服务端为准（丢弃本地草稿）」与「同键重试提交」；不提供任何换新 Key 重发的选项。「以服务端为准」只清本地视图，不动账本，下次恢复若仍不确定会再次提示。
+
+## 外部入口（Android）
+
+| 入口 | 实现 | 安全约束 |
+| --- | --- | --- |
+| 深链 `myhermes://send` | 解析 → 选实例/会话 → 写内存 pending → 跳聊天页 | 只预填不自动发送；文本 4000 字截断；未知实例报错 |
+| 深链 `myhermes://chat/<server>/<session>` | Expo Router 原生路由 | 参数走现有校验 |
+| 剪贴板快捷方式 | `myhermes://send?source=clipboard` | 读不到时提示，不静默失败 |
+| 系统分享（文本/图片） | `expo-share-intent` + `ACTION_SEND` | 图片走压缩流程，丢弃 EXIF；不自动发送 |
+| 长按图标快捷方式 | 静态 `shortcuts.xml`（config plugin） | 只有三个固定入口，不含密钥 |
+
+外部内容只存在内存（`src/features/intents/pending.ts`），聊天页取走即清空，不落盘。
 
 ## 幂等与恢复
 
