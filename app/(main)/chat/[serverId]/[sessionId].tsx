@@ -36,9 +36,26 @@ type ChatItem =
   | { kind: 'draft'; key: string; at: number; text: string };
 
 /** 模型的 provider / 上下文窗口提示；两者都没有时返回 undefined，避免重复显示 id。 */
+/** 按提供商分组，保留服务器返回的顺序（官方 payload 已按 canonical 顺序排好）。 */
+function groupModels(options: ModelOption[]): { key: string; title: string; items: ModelOption[] }[] {
+  const groups: { key: string; title: string; items: ModelOption[] }[] = [];
+  for (const option of options) {
+    const key = option.provider ?? '';
+    const title = option.providerLabel ?? option.provider ?? '其他提供商';
+    const existing = groups.find((group) => group.key === key);
+    if (existing) existing.items.push(option);
+    else groups.push({ key, title, items: [option] });
+  }
+  return groups;
+}
+
 function modelHint(option: ModelOption): string | undefined {
   return (
-    [option.provider, option.contextWindow ? `上下文 ${option.contextWindow} tokens` : undefined]
+    [
+      option.providerLabel ?? option.provider,
+      option.contextWindow ? `上下文 ${option.contextWindow} tokens` : undefined,
+      option.current ? '服务器当前使用' : undefined,
+    ]
       .filter(Boolean)
       .join(' · ') || undefined
   );
@@ -58,6 +75,8 @@ export default function ChatScreen() {
   const [forkedFrom, setForkedFrom] = useState<string | null>(null);
   const [features, setFeatures] = useState<Record<string, boolean>>({});
   const [models, setModels] = useState<ModelOption[] | null>(null);
+  /** 按 provider 折叠：默认只展开包含当前/已选模型的那一组，其余收起 */
+  const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -115,6 +134,8 @@ export default function ChatScreen() {
 
   const openModels = () => {
     setModelsOpen(true);
+    // 每次打开回到默认：只展开当前/已选模型所在的组
+    setExpandedProviders({});
     if (models === null && !modelsLoading) void loadModels();
   };
 
@@ -179,7 +200,14 @@ export default function ChatScreen() {
   const showStop = canStopRun(latestRun?.status) && features.run_stop === true;
   const canResolveUnknown = features.run_unknown_resolution === true;
   const modelsEnabled = features.model_options === true;
-  const modelName = model ? model.label || model.id : '默认模型';
+  // 没手动选过时，直接显示服务器当前配置的模型，而不是笼统的「默认模型」
+  const serverCurrent = models?.find((option) => option.current);
+  const modelName = model ? model.label || model.id : serverCurrent ? serverCurrent.label || serverCurrent.id : '默认模型';
+  // 折叠默认值：优先展开包含当前/已选模型的组，否则展开第一组；用户点过之后以 expandedProviders 为准
+  const modelGroups = useMemo(() => groupModels(models ?? []), [models]);
+  const focusModelId = (model ?? serverCurrent)?.id;
+  const defaultExpandedKey =
+    modelGroups.find((group) => group.items.some((item) => item.id === focusModelId))?.key ?? modelGroups[0]?.key;
   // 标题栏空间有限：chip 只显示截断后的名字，无障碍标签保留全名
   const modelLabel = modelName.length > 18 ? `${modelName.slice(0, 17)}…` : modelName;
   const network = chat.view.network;
@@ -426,6 +454,15 @@ export default function ChatScreen() {
 
         {chat.loading && chat.view.messages.length === 0 ? (
           <LoadingView label="正在加载历史消息…" />
+        ) : items.length === 0 ? (
+          // 空态放在 inverted 列表之外：列表翻转会把 ListEmptyComponent 一起镜像
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <EmptyState
+              icon="chatbubble-ellipses-outline"
+              title="还没有消息"
+              message="输入文字开始对话。工具输出会单独显示为可折叠卡片。"
+            />
+          </View>
         ) : (
           <FlatList
             data={items}
@@ -434,15 +471,6 @@ export default function ChatScreen() {
             contentContainerStyle={{ paddingVertical: theme.space.sm }}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            ListEmptyComponent={
-              <View style={{ transform: [{ scaleY: -1 }] }}>
-                <EmptyState
-                  icon="chatbubble-ellipses-outline"
-                  title="还没有消息"
-                  message="输入文字开始对话。工具输出会单独显示为可折叠卡片。"
-                />
-              </View>
-            }
             renderItem={({ item }) => {
               if (item.kind === 'tool') return <ToolCard event={item.event} />;
               if (item.kind === 'draft') return <DraftMessage text={item.text} />;
@@ -655,24 +683,69 @@ export default function ChatScreen() {
                   ) : undefined
                 }
               />
-              {(models ?? []).map((option) => (
-                <ListRow
-                  key={`${option.provider ?? ''}:${option.id}`}
-                  title={option.label || option.id}
-                  subtitle={modelHint(option)}
-                  onPress={() => {
-                    setModel(option);
-                    setModelsOpen(false);
-                  }}
-                  accessibilityLabel={`选择模型 ${option.label || option.id}`}
-                  accessibilityHint={modelHint(option) ?? option.id}
-                  right={
-                    model?.id === option.id ? (
-                      <Ionicons name="checkmark" size={theme.icon.md} color={theme.colors.accent} />
-                    ) : undefined
-                  }
-                />
-              ))}
+              {modelGroups.map((group) => {
+                const expanded = expandedProviders[group.key] ?? group.key === defaultExpandedKey;
+                const chosen = group.items.find((option) => option.id === (model ?? serverCurrent)?.id);
+                return (
+                  <View key={`group-${group.key}`} style={{ gap: theme.space.xs }}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded }}
+                      accessibilityLabel={`${group.title}，${group.items.length} 个模型，${expanded ? '已展开' : '已折叠'}`}
+                      accessibilityHint={expanded ? '点击收起该提供商的模型' : '点击展开该提供商的模型'}
+                      onPress={() =>
+                        setExpandedProviders((prev) => ({ ...prev, [group.key]: !expanded }))
+                      }
+                      style={({ pressed }) => ({
+                        minHeight: theme.minTouch,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: theme.space.sm,
+                        marginTop: theme.space.sm,
+                        paddingHorizontal: theme.space.xs,
+                        borderRadius: theme.radius.sm,
+                        backgroundColor: pressed ? theme.colors.surfaceAlt : 'transparent',
+                      })}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>
+                          {`${group.title}（${group.items.length}）`}
+                        </Text>
+                        {!expanded && chosen ? (
+                          <Text numberOfLines={1} style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
+                            {`已选 ${chosen.label || chosen.id}`}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Ionicons
+                        name={expanded ? 'chevron-up' : 'chevron-down'}
+                        size={theme.icon.md}
+                        color={theme.colors.textMuted}
+                      />
+                    </Pressable>
+                    {expanded
+                      ? group.items.map((option) => (
+                          <ListRow
+                            key={`${option.provider ?? ''}:${option.id}`}
+                            title={option.label || option.id}
+                            subtitle={modelHint(option)}
+                            onPress={() => {
+                              setModel(option);
+                              setModelsOpen(false);
+                            }}
+                            accessibilityLabel={`选择模型 ${option.label || option.id}`}
+                            accessibilityHint={modelHint(option) ?? option.id}
+                            right={
+                              model?.id === option.id ? (
+                                <Ionicons name="checkmark" size={theme.icon.md} color={theme.colors.accent} />
+                              ) : undefined
+                            }
+                          />
+                        ))
+                      : null}
+                  </View>
+                );
+              })}
               {(models ?? []).length === 0 ? (
                 <Caption>服务器没有返回可选模型，将继续使用默认模型。</Caption>
               ) : null}

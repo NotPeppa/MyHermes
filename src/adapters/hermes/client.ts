@@ -53,17 +53,44 @@ export class RunsAdapter {
 }
 export class ModelsAdapter {
   constructor(private transport: Transport) {}
-  /** Flat list from `{providers:[{id,models:[{id,...}]}]}`; unknown shapes yield [] instead of throwing. */
+  /**
+   * 官方形状是 `{providers:[{slug, models:[ "model-id", ... ], pricing}], model, provider}`：
+   * provider 用 `slug`，models 是**字符串数组**（不是对象数组）。旧版/自定义实现可能给对象数组，
+   * 两种都接受；结构不认识时返回 [] 而不是抛错。
+   */
   async options(): Promise<ModelOption[]> {
     const value = await this.transport.request<any>('api/model/options');
     const providers = Array.isArray(value?.providers) ? value.providers : Array.isArray(value?.data) ? value.data : [];
+    const currentModel = text(value?.model);
+    const currentProvider = text(value?.provider);
     const options: ModelOption[] = [];
     for (const provider of providers) {
       if (!Array.isArray(provider?.models)) continue;
+      const providerId = text(provider.slug) ?? text(provider.id) ?? text(provider.provider);
+      const providerLabel = text(provider.label) ?? text(provider.name);
       for (const model of provider.models) {
+        // 字符串形式：只有 id，标签与上下文用 provider 行上的信息兜底
+        if (typeof model === 'string') {
+          if (!model.trim()) continue;
+          options.push({
+            id: model,
+            ...(providerId ? { provider: providerId } : {}),
+            ...(providerLabel ? { providerLabel } : {}),
+            ...(currentModel === model && (!currentProvider || currentProvider === providerId) ? { current: true } : {}),
+          });
+          continue;
+        }
         if (typeof model?.id !== 'string' || !model.id) continue;
-        const label = model.label ?? model.name, context = model.context_window ?? model.contextWindow;
-        options.push({ id: model.id, ...(typeof provider.id === 'string' ? { provider: provider.id } : {}), ...(typeof label === 'string' ? { label } : {}), ...(typeof context === 'number' ? { contextWindow: context } : {}) });
+        const label = text(model.label) ?? text(model.name);
+        const context = typeof model.context_window === 'number' ? model.context_window : typeof model.contextWindow === 'number' ? model.contextWindow : undefined;
+        options.push({
+          id: model.id,
+          ...(providerId ? { provider: providerId } : {}),
+          ...(providerLabel ? { providerLabel } : {}),
+          ...(label ? { label } : {}),
+          ...(context ? { contextWindow: context } : {}),
+          ...(currentModel === model.id && (!currentProvider || currentProvider === providerId) ? { current: true } : {}),
+        });
       }
     }
     return options;

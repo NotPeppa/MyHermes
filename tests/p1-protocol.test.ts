@@ -66,13 +66,30 @@ test('forkSession posts to the fork path and caches the returned session', async
   await service.dispose();
 });
 
-test('listModels flattens providers, returns [] for unknown shapes and for servers without the flag', async () => {
+test('listModels 同时接受官方字符串形状与旧的对象形状', async () => {
+  // 官方 build_model_options_payload：provider 用 slug，models 是字符串数组，模型标签在 pricing 里
+  const official = {
+    providers: [
+      { slug: 'nous', label: 'Nous Research', models: ['hermes-4-405b', 'hermes-4-70b'], pricing: { 'hermes-4-405b': { input: '0.90', output: '2.70' } } },
+      { slug: 'openai', label: 'OpenAI', models: ['gpt-5.1'] },
+    ],
+    model: 'hermes-4-405b',
+    provider: 'nous',
+  };
+  const { repo } = memory({ model_options: true });
+  const officialService = new HermesService({ repository: repo, vault, now: () => 1, fetch: async () => json(official) });
+  assert.deepEqual(await officialService.listModels('a'), [
+    { id: 'hermes-4-405b', provider: 'nous', providerLabel: 'Nous Research', current: true },
+    { id: 'hermes-4-70b', provider: 'nous', providerLabel: 'Nous Research' },
+    { id: 'gpt-5.1', provider: 'openai', providerLabel: 'OpenAI' },
+  ]);
+  await officialService.dispose();
+
   const payload = { providers: [
     { id: 'nous', models: [{ id: 'hermes-4-405b', name: 'Hermes 4 405B', context_window: 131072 }, { id: 'hermes-4-70b', label: 'Hermes 4 70B', contextWindow: 65536 }] },
     { id: 'openai', models: [{ id: 'gpt-5.1', label: 'GPT-5.1' }] },
   ] };
-  const { repo } = memory({ model_options: true });
-  const service = new HermesService({ repository: repo, vault, now: () => 1, fetch: async () => json(payload) });
+  const service = new HermesService({ repository: memory({ model_options: true }).repo, vault, now: () => 1, fetch: async () => json(payload) });
   assert.deepEqual(await service.listModels('a'), [
     { id: 'hermes-4-405b', provider: 'nous', label: 'Hermes 4 405B', contextWindow: 131072 },
     { id: 'hermes-4-70b', provider: 'nous', label: 'Hermes 4 70B', contextWindow: 65536 },
@@ -139,11 +156,12 @@ test('real HTTP mock contract: capability flags, fork with copied history, model
     assert.equal(forked.forkedFrom, parent.id);
     assert.equal(forked.title, '分支：原始会话');
     assert.ok((await sessions.messages(forked.id)).some(m => m.body === '第一轮'));
+    // 官方形状：provider 用 slug，models 是字符串数组，当前模型由 model+provider 标出
     assert.deepEqual(await new ModelsAdapter(transport).options(), [
-      { id: 'hermes-4-405b', provider: 'nous', label: 'Hermes 4 405B', contextWindow: 131072 },
-      { id: 'hermes-4-70b', provider: 'nous', label: 'Hermes 4 70B', contextWindow: 131072 },
-      { id: 'gpt-5.1', provider: 'openai', label: 'GPT-5.1', contextWindow: 400000 },
-      { id: 'gpt-5-mini', provider: 'openai', label: 'GPT-5 mini', contextWindow: 400000 },
+      { id: 'hermes-4-405b', provider: 'nous', providerLabel: 'Nous Research', current: true },
+      { id: 'hermes-4-70b', provider: 'nous', providerLabel: 'Nous Research' },
+      { id: 'gpt-5.1', provider: 'openai', providerLabel: 'OpenAI' },
+      { id: 'gpt-5-mini', provider: 'openai', providerLabel: 'OpenAI' },
     ]);
     const runs = new RunsAdapter(transport);
     const turn: OutboundTurn = { clientTurnId: 'p1-turn', serverId: 'alpha', sessionId: parent.id, idempotencyKey: `p1-key-${Date.now()}`, requestBodyJson: JSON.stringify({ input: 'echo', session_id: parent.id, model: 'gpt-5.1', provider: 'openai' }), submissionState: 'submitting', createdAt: Date.now() };

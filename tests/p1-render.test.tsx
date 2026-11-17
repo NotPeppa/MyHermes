@@ -207,3 +207,55 @@ test('普通会话不显示「分支自」提示', async () => {
   assert.doesNotMatch(textOf(tree.toJSON()), /分支自/);
   await act(async () => tree.unmount());
 });
+
+test('模型抽屉按提供商分组，组头带数量', async () => {
+  const repository = memoryRepository(makeServer({ model_options: true }), [{ serverId: 'srv-1', id: 'sess-1', title: '会话', updatedAt: 1 }]);
+  const service = new HermesService({
+    repository,
+    vault,
+    fetch: (async (url: string) => {
+      if (url.includes('/api/model/options')) {
+        return new Response(JSON.stringify({
+          providers: [
+            { slug: 'codex', label: 'Codex', models: ['gpt-6.1-sol', 'gpt-5.6-luna'] },
+            { slug: 'nous', label: 'Nous Research', models: ['hermes-4-405b'] },
+          ],
+          model: 'gpt-6.1-sol',
+          provider: 'codex',
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ messages: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as never,
+  });
+  configureAppServices({ repository, vault, service });
+
+  const tree = await render(createElement(ChatScreen));
+  const chip = tree.root.findAll((node) => String(node.props?.accessibilityLabel ?? '').startsWith('当前模型'))[0];
+  assert.ok(chip, '应渲染模型 chip');
+  await act(async () => {
+    chip.props.onPress?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  const body = textOf(tree.toJSON());
+  assert.match(body, /Codex（2）/, '应有 codex 组头');
+  assert.match(body, /Nous Research（1）/, '应有 nous 组头');
+
+  // 默认只展开包含当前模型（gpt-6.1-sol）的 codex 组，nous 组收起
+  const headerNodes = tree.root.findAll((node) => /个模型，已(展开|折叠)/.test(String(node.props?.accessibilityLabel ?? '')));
+  // 同一个可访问容器可能被组件与宿主节点各匹配一次，按标签去重
+  const headers = [...new Map(headerNodes.map((node) => [String(node.props.accessibilityLabel), node])).values()];
+  assert.equal(headers.length, 2, `两个组头都应可折叠，实际：${headers.map((node) => node.props.accessibilityLabel).join(' | ')}`);
+  const codexHeader = headers.find((node) => String(node.props.accessibilityLabel).startsWith('Codex'));
+  const nousHeader = headers.find((node) => String(node.props.accessibilityLabel).startsWith('Nous Research'));
+  assert.equal(codexHeader?.props.accessibilityState?.expanded, true, 'codex 组默认展开');
+  assert.equal(nousHeader?.props.accessibilityState?.expanded, false, 'nous 组默认收起');
+  assert.doesNotMatch(body, /hermes-4-405b/, '收起的组不应渲染模型行');
+
+  // 展开 nous 组后应出现它的模型
+  await act(async () => {
+    nousHeader?.props.onPress?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  assert.match(textOf(tree.toJSON()), /hermes-4-405b/, '展开后应显示模型行');
+  await act(async () => tree.unmount());
+});

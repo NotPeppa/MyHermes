@@ -58,8 +58,12 @@ export interface Job {
 export interface ModelOption {
   id: string;
   provider?: string;
+  /** provider 行的展示名（官方 payload 里叫 label/name） */
+  providerLabel?: string;
   label?: string;
   contextWindow?: number;
+  /** 服务器当前配置的模型（/api/model/options 的 model+provider） */
+  current?: boolean;
 }
 /** 请求级模型覆盖，缺省则用服务器默认模型。 */
 export interface SendOptions {

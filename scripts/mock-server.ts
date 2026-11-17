@@ -180,27 +180,32 @@ export const server = createServer(async (req, res) => {
   }
   if (path === '/api/model/options' && method === 'GET') {
     if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
+    // 与官方 build_model_options_payload 一致：provider 用 slug，models 是字符串数组
     return json(res, 200, {
       providers: [
         {
-          id: 'nous',
-          name: 'Nous Research',
-          models: [
-            { id: 'hermes-4-405b', name: 'Hermes 4 405B', context_window: 131072, pricing: { input_per_mtok: 0.9, output_per_mtok: 2.7 }, capabilities: { tools: true, vision: false, reasoning: true } },
-            { id: 'hermes-4-70b', label: 'Hermes 4 70B', context_window: 131072, pricing: { input_per_mtok: 0.2, output_per_mtok: 0.6 }, capabilities: { tools: true, vision: false, reasoning: false } },
-          ],
+          slug: 'nous',
+          label: 'Nous Research',
+          authenticated: true,
+          is_current: true,
+          models: ['hermes-4-405b', 'hermes-4-70b'],
+          total_models: 2,
+          pricing: { 'hermes-4-405b': { input: '0.90', output: '2.70' }, 'hermes-4-70b': { input: '0.20', output: '0.60' } },
         },
         {
-          id: 'openai',
-          name: 'OpenAI',
-          models: [
-            { id: 'gpt-5.1', label: 'GPT-5.1', contextWindow: 400000, pricing: { input_per_mtok: 1.25, output_per_mtok: 10 }, capabilities: { tools: true, vision: true, reasoning: true } },
-            { id: 'gpt-5-mini', name: 'GPT-5 mini', contextWindow: 400000, pricing: { input_per_mtok: 0.25, output_per_mtok: 2 }, capabilities: { tools: true, vision: true, reasoning: true } },
-          ],
+          slug: 'openai',
+          label: 'OpenAI',
+          authenticated: true,
+          models: ['gpt-5.1', 'gpt-5-mini'],
+          total_models: 2,
+          pricing: { 'gpt-5.1': { input: '1.25', output: '10.00' } },
         },
       ],
+      model: 'hermes-4-405b',
+      provider: 'nous',
     });
   }
+
   if (path === '/v1/skills' && method === 'GET') {
     if (!auth(req, profile)) return json(res, 401, { error: 'unauthorized' });
     return json(res, 200, [
