@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "MyHermes",
+    "slug": "myhermes",
+    "version": "0.1.0",
+    "scheme": "myhermes",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "orientation": "default",
+    "ios": {
+      "bundleIdentifier": "dev.myhermes.mobile",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "dev.myhermes.mobile",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-status-bar"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
