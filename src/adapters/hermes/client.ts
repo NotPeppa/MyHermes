@@ -3,6 +3,35 @@ import { Transport, ProtocolError, type RequestOptions } from '../../api/transpo
 import { segment } from '../../api/urls';
 import { consumeSSE } from '../../api/sse';
 import { normalizeEvent, runState } from './events';
+/** 消息正文：字符串、多模态 parts 或 body 字段；图片占位符保留。 */
+function messageBody(value: any): string {
+  if (typeof value?.content === 'string') return value.content;
+  if (typeof value?.body === 'string') return value.body;
+  if (Array.isArray(value?.content)) {
+    return value.content
+      .map((part: any) => (typeof part === 'string' ? part : part?.type === 'text' ? part.text : part?.type === 'image_url' || part?.type === 'input_image' ? '[图片]' : ''))
+      .filter((text: unknown): text is string => typeof text === 'string' && text.length > 0)
+      .join('\n');
+  }
+  return '';
+}
+
+/** 时间戳：官方 timestamp 可能是 ISO 字符串、秒或毫秒；无法识别时返回 undefined。 */
+function messageTimestamp(value: any): number | undefined {
+  const raw = value?.timestamp ?? value?.created_at ?? value?.createdAt ?? value?.time;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    // 秒级时间戳（< 1e11）换算成毫秒
+    return raw > 0 && raw < 1e11 ? Math.round(raw * 1000) : Math.round(raw);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) return parsed;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return numeric > 0 && numeric < 1e11 ? Math.round(numeric * 1000) : Math.round(numeric);
+  }
+  return undefined;
+}
+
 const rows = (value: any, field: string): any[] => { const result = Array.isArray(value) ? value : value?.[field] ?? value?.data; if (!Array.isArray(result)) throw new ProtocolError('protocol', '服务器列表响应格式错误'); return result; };
 /** P2 只读发现：结构不认识就当空列表，不把上游差异变成错误弹窗。 */
 const maybeRows = (value: any, field: string): any[] => Array.isArray(value) ? value : Array.isArray(value?.[field]) ? value[field] : Array.isArray(value?.data) ? value.data : [];
@@ -22,11 +51,22 @@ export class SessionsAdapter {
   async rename(id: string, title: string): Promise<void> { await this.transport.request(`api/sessions/${segment(id)}`, { method: 'PATCH', body: JSON.stringify({ title }) }); }
   async delete(id: string): Promise<void> { await this.transport.request(`api/sessions/${segment(id)}`, { method: 'DELETE' }); }
   async messages(id: string): Promise<Message[]> {
-    return rows(await this.transport.request(`api/sessions/${segment(id)}/messages`, { query: { inline_images: false } }), 'messages').map((value, index) => ({
-      id: `${this.serverId}:${id}:${value.id ?? value.message_id ?? index}`, serverId: this.serverId, sessionId: id,
-      serverMessageId: value.id ?? value.message_id, role: ['user', 'assistant', 'system', 'tool'].includes(value.role) ? value.role : 'assistant',
-      body: typeof value.content === 'string' ? value.content : typeof value.body === 'string' ? value.body : Array.isArray(value.content) ? value.content.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('\n') : '', createdAt: Number(value.created_at ?? index),
-    }));
+    const raw = rows(await this.transport.request(`api/sessions/${segment(id)}/messages`, { query: { inline_images: false } }), 'messages');
+    return raw
+      // 压缩脚手架消息（display_kind=hidden）不展示
+      .filter((value: any) => value?.display_kind !== 'hidden')
+      .map((value: any, index: number) => ({
+        id: `${this.serverId}:${id}:${value.id ?? value.message_id ?? index}`,
+        serverId: this.serverId,
+        sessionId: id,
+        serverMessageId: value.id ?? value.message_id,
+        role: ['user', 'assistant', 'system', 'tool'].includes(value.role) ? value.role : 'assistant',
+        body: messageBody(value),
+        // 官方字段是 timestamp（ISO 或 epoch），没有时才用序号占位保证顺序；显示层会隐藏这种占位时间
+        createdAt: messageTimestamp(value) ?? index,
+      }))
+      // 只有工具调用、没有正文的 assistant 消息不单独成行（工具卡片已经展示）
+      .filter((message: Message) => message.body.trim().length > 0 || message.role === 'user');
   }
   async stream(id: string, body: string, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
     await this.transport.request(`api/sessions/${segment(id)}/chat/stream`, { method: 'POST', body, signal, timeoutMs: 3_600_000, headers: { Accept: 'text/event-stream' } }, (response, abort) => consumeSSE(response, abort, frame => onEvent(normalizeEvent(frame, id, 'sessions'))));

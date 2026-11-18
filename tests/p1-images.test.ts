@@ -149,7 +149,9 @@ test('compat 模式纯文字不带 parts 数组', async () => {
 
 test('Runs 模式带图片被拒绝且不发送请求', async () => {
   const { bodies, fetcher } = captureFetch();
-  const service = new HermesService({ repository: repositoryFor(server('native_runs')), vault, fetch: fetcher as never });
+  const target = server('native_runs');
+  delete target.capabilities.features.session_chat_stream;
+  const service = new HermesService({ repository: repositoryFor(target), vault, fetch: fetcher as never });
   await assert.rejects(
     service.send('srv', 'sess', '看图', { images: [attachment()] }),
     (error: unknown) => error instanceof HermesError && error.code === 'protocol',
@@ -165,5 +167,45 @@ test('Sessions 单轮使用官方字段 input', async () => {
   const call = bodies.find((item) => item.url.includes('/chat/stream'));
   assert.ok(call, '应调用 chat/stream');
   assert.deepEqual(JSON.parse(call.body), { input: '你好' });
+  await service.dispose();
+});
+
+test('Runs 模式带图片改走会话流式接口（多模态 parts）', async () => {
+  const { bodies, fetcher } = captureFetch();
+  const target = server('native_runs');
+  target.capabilities.features.session_chat_streaming = true;
+  const service = new HermesService({ repository: repositoryFor(target), vault, fetch: fetcher as never });
+  await service.send('srv', 'sess', '看图', { images: [attachment()] });
+  const call = bodies.find((item) => item.url.includes('/chat/stream'));
+  assert.ok(call, `应调用会话流式接口，实际：${bodies.map((b) => b.url).join(', ')}`);
+  const body = JSON.parse(call.body);
+  assert.ok(Array.isArray(body.input), 'input 应是 parts 数组');
+  assert.deepEqual(body.input[0], { type: 'text', text: '看图' });
+  assert.match(body.input[1].image_url.url, /^data:image\/jpeg;base64,/);
+  assert.ok(!bodies.some((item) => item.url.includes('/v1/runs')), '不应再提交 Runs');
+  await service.dispose();
+});
+
+test('Runs 模式纯文字仍走 Runs（保留恢复能力）', async () => {
+  const { bodies, fetcher } = captureFetch();
+  const target = server('native_runs');
+  target.capabilities.features.session_chat_streaming = true;
+  const service = new HermesService({ repository: repositoryFor(target), vault, fetch: fetcher as never });
+  await service.send('srv', 'sess', '你好');
+  assert.ok(bodies.some((item) => item.url.includes('/v1/runs')), '纯文字应走 Runs');
+  assert.ok(!bodies.some((item) => item.url.includes('/chat/stream')));
+  await service.dispose();
+});
+
+test('既没有会话流式接口也不是兼容模式时，带图片明确拒绝', async () => {
+  const { bodies, fetcher } = captureFetch();
+  const target = server('native_runs');
+  delete target.capabilities.features.session_chat_stream;
+  const service = new HermesService({ repository: repositoryFor(target), vault, fetch: fetcher as never });
+  await assert.rejects(
+    service.send('srv', 'sess', '看图', { images: [attachment()] }),
+    (error: unknown) => error instanceof HermesError && error.code === 'protocol',
+  );
+  assert.equal(bodies.length, 0);
   await service.dispose();
 });

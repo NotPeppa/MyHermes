@@ -122,13 +122,14 @@ test('native_runs 模式不渲染图片入口，也没有禁用占位', async ()
   assert.equal(findByLabel(tree, '添加图片').length, 0, '非兼容模式不应出现图片按钮');
   const json = textOf(tree.toJSON());
   assert.doesNotMatch(json, /添加图片/);
-  assert.doesNotMatch(json, /仅上传压缩后的副本/, '非兼容模式不应出现图片隐私提示');
+  assert.doesNotMatch(json, /添加图片/, '没有会话流式接口时不应出现图片入口');
   await act(async () => tree.unmount());
 });
 
-test('openai_compat 模式渲染隐私提示文案', async () => {
+test('openai_compat 模式渲染图片入口（隐私提示已移除）', async () => {
   install('openai_compat');
   const tree = await render();
-  assert.match(textOf(tree.toJSON()), /仅上传压缩后的副本，不含 EXIF 与定位信息/);
+  // 隐私提示已按需求移除；压缩与去元数据仍由 picker 的 accessibilityHint 说明
+  assert.match(textOf(tree.toJSON()), /添加图片/);
   await act(async () => tree.unmount());
 });

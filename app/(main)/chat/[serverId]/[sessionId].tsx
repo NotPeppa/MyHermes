@@ -6,7 +6,6 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   Text,
   TextInput,
@@ -71,7 +70,6 @@ export default function ChatScreen() {
   const { repository, service } = useAppServices();
   const chat = useChat(serverId, sessionId);
   const [input, setInput] = useState('');
-  const [subtitle, setSubtitle] = useState('');
   const [forkedFrom, setForkedFrom] = useState<string | null>(null);
   const [features, setFeatures] = useState<Record<string, boolean>>({});
   const [models, setModels] = useState<ModelOption[] | null>(null);
@@ -104,9 +102,15 @@ export default function ChatScreen() {
         if (!alive) return;
         const server = servers.find((item) => item.id === serverId);
         const session = sessions.find((item) => item.id === sessionId);
-        setSubtitle([server?.name, session?.title].filter(Boolean).join(' · '));
         setFeatures(server?.capabilities.features ?? {});
-        setImagesEnabled(server?.capabilities.mode === 'openai_compat');
+        // 图片走多模态接口：兼容模式用 image_url，会话流式接口用内联 parts；
+        // Runs 模式只要服务器声明了会话流式接口也能发图（该轮不支持跨重启恢复）
+        const features = server?.capabilities.features ?? {};
+        setImagesEnabled(
+          server?.capabilities.mode === 'openai_compat' ||
+            features.session_chat_streaming === true ||
+            features.session_chat_stream === true,
+        );
         // 分支来源：优先显示源会话标题，缓存里没有就退回 id
         const origin = session?.forkedFrom;
         setForkedFrom(origin ? sessions.find((item) => item.id === origin)?.title || origin : null);
@@ -295,7 +299,21 @@ export default function ChatScreen() {
     <Screen>
       <ScreenHeader
         title="对话"
-        subtitle={subtitle || undefined}
+        subtitle={
+          <View
+            accessible
+            accessibilityLabel={`运行状态：${statusText(latestRun?.status ?? (uncertain ? 'submission_uncertain' : 'idle'))}`}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs, marginTop: 2 }}
+          >
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: toneColor }} />
+            <Text numberOfLines={1} style={{ color: toneColor, fontSize: theme.font.caption }}>
+              {statusText(latestRun?.status ?? (uncertain ? 'submission_uncertain' : 'idle'))}
+            </Text>
+            {latestRun?.status === 'unknown' && latestRun.rawStatus ? (
+              <Caption>{`（上游：${latestRun.rawStatus}）`}</Caption>
+            ) : null}
+          </View>
+        }
         onBack={() => router.back()}
         actions={
           // 没有 model_options 能力就不放任何模型入口
@@ -312,36 +330,12 @@ export default function ChatScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // Android 15+ 强制 edge-to-edge 后 adjustResize 不再缩小窗口，
+        // 必须自己用 padding 顶起输入栏，否则键盘会盖住输入框
+        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.sm, gap: theme.space.sm }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}>
-            <View
-              accessible
-              accessibilityLabel={`运行状态：${statusText(latestRun?.status ?? (uncertain ? 'submission_uncertain' : 'idle'))}`}
-              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}
-            >
-              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: toneColor }} />
-              <Text style={{ color: toneColor, fontSize: theme.font.body }}>
-                {statusText(latestRun?.status ?? (uncertain ? 'submission_uncertain' : 'idle'))}
-              </Text>
-              {latestRun?.rawStatus && latestRun.rawStatus !== latestRun.status ? (
-                <Caption>（上游：{latestRun.rawStatus}）</Caption>
-              ) : null}
-            </View>
-            {showStop && latestRun ? (
-              <Button
-                label="停止"
-                variant="secondary"
-                icon="stop-circle-outline"
-                busy={stopping}
-                onPress={() => void chat.stop(latestRun.runId)}
-                accessibilityHint="请求服务器停止当前运行，不会提前宣告成功"
-              />
-            ) : null}
-          </View>
-
           {forkedFrom ? <Caption>分支自 {forkedFrom}</Caption> : null}
 
           {network !== 'connected' ? (
@@ -551,9 +545,6 @@ export default function ChatScreen() {
                   ))}
                 </View>
               ) : null}
-              <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
-                仅上传压缩后的副本，不含 EXIF 与定位信息
-              </Text>
               {atLimit ? (
                 <Text style={{ color: theme.colors.warning, fontSize: theme.font.caption }}>
                   已达上限 {MAX_IMAGES} 张，移除后可继续添加

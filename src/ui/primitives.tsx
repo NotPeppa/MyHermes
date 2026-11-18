@@ -31,7 +31,8 @@ export function ScreenHeader({
   actions,
 }: {
   title: string;
-  subtitle?: string;
+  /** 字符串走默认样式；需要彩色圆点等自定义内容时传节点 */
+  subtitle?: ReactNode;
   onBack?: () => void;
   actions?: ReactNode;
 }) {
@@ -62,11 +63,13 @@ export function ScreenHeader({
         >
           {title}
         </Text>
-        {subtitle ? (
+        {typeof subtitle === 'string' ? (
           <Text numberOfLines={1} style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
             {subtitle}
           </Text>
-        ) : null}
+        ) : (
+          subtitle ?? null
+        )}
       </View>
       {actions}
     </View>

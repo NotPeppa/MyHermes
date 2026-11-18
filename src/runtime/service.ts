@@ -227,13 +227,21 @@ export class HermesService {
       // Request-level model override applies to every mode; absent fields stay absent so the body (and its idempotency fingerprint) is unchanged.
       const override = { ...(options.model ? { model: options.model } : {}), ...(options.provider ? { provider: options.provider } : {}) };
       const images = options.images ?? [];
-      // 官方文档只确认 Chat Completions 的 image_url 与 Responses 的 input_image；Runs 与 Sessions 未声明图片字段，不臆造。
-      if (images.length > 0 && mode !== 'openai_compat') throw new ProtocolError('protocol', '当前模式未声明图片输入，请改用兼容模式或直接发送文字');
-      const body = mode === 'native_runs'
+      /**
+       * 图片只能走多模态接口：官方确认 Chat Completions 的 image_url 与 Sessions chat/stream 的
+       * 内联图片；/v1/runs 只接受 input 字符串。所以带图片时改走会话流式接口（代价是这一轮
+       * 没有 run_id，不能跨重启恢复），纯文字仍然走 Runs 以获得完整恢复能力。
+       */
+      const sessionStream = this.featureOn(clients.server, 'session_chat_streaming', 'session_chat_stream');
+      if (images.length > 0 && mode === 'native_runs' && !sessionStream) {
+        throw new ProtocolError('protocol', '服务器未声明会话流式接口，无法发送图片');
+      }
+      const viaSessionStream = mode === 'native_sessions' || (mode === 'native_runs' && images.length > 0);
+      const body = mode === 'native_runs' && !viaSessionStream
         ? { input, ...(!session.localOnly ? { session_id: sessionId } : {}), ...override }
-        // 官方示例的会话单轮字段是 input（不是 message）
-        : mode === 'native_sessions'
-          ? { input, ...override }
+        // 官方示例的会话单轮字段是 input（不是 message）；带图片时 content 是 parts 数组
+        : viaSessionStream
+          ? { input: buildCompatContent(input, images), ...override }
           : {
               model: clients.server.capabilities.model ?? 'hermes',
               stream: true,
@@ -249,7 +257,7 @@ export class HermesService {
       const cached = await this.cachedMessages(serverId, sessionId);
       const optimistic: Message = { id: turn.clientTurnId, serverId, sessionId, role: 'user', body: images.length > 0 ? `${input}${input ? ' ' : ''}[${images.length} 张图片]` : input, createdAt: this.now() };
       this.patch(serverId, sessionId, { submission: turn, messages: [...cached, optimistic], draft: '', commentary: [], error: undefined });
-      if (mode === 'native_runs') await this.submit(turn, clients.runs);
+      if (mode === 'native_runs' && !viaSessionStream) await this.submit(turn, clients.runs);
       else {
         const run: Run = { ...turn, runId: `local-${turn.clientTurnId}`, status: 'running', updatedAt: this.now() };
         await this.storeRun(run);
@@ -257,7 +265,7 @@ export class HermesService {
           const messages = [...history, { id: turn.clientTurnId, serverId, sessionId, role: 'user' as const, body: input, createdAt: this.now() }];
           await this.saveMessages(serverId, sessionId, messages); this.patch(serverId, sessionId, { messages });
         }
-        this.startStream(run, signal => mode === 'native_sessions' ? clients.sessions.stream(sessionId, turn.requestBodyJson, e => this.enqueue(run, e), signal) : clients.compat.stream(turn.requestBodyJson, run.runId, e => this.enqueue(run, e), signal), false);
+        this.startStream(run, signal => viaSessionStream ? clients.sessions.stream(sessionId, turn.requestBodyJson, e => this.enqueue(run, e), signal) : clients.compat.stream(turn.requestBodyJson, run.runId, e => this.enqueue(run, e), signal), false);
       }
       return (await this.options.repository.listTurns(serverId, sessionId)).find(t => t.clientTurnId === turn.clientTurnId)!;
     } catch (error) { const classified = errorOf(error); this.patch(serverId, sessionId, { error: classified }); throw classified; }

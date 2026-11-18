@@ -25,7 +25,8 @@ interface Run {
 
 const KEYS: Record<string, string> = { alpha: 'key-alpha', beta: 'key-beta', fault: 'key-fault' };
 const sessions = new Map<string, { id: string; profile: string; title: string; updatedAt: number }>();
-const messages = new Map<string, { role: string; content: string; created_at: number }[]>();
+interface MockMessage { id: string; role: string; content: string; timestamp: string }
+const messages = new Map<string, MockMessage[]>();
 const runs = new Map<string, Run>();
 const idempotency = new Map<string, string>();
 
@@ -132,7 +133,7 @@ function finish(run: Run, status: Status, output?: string) {
   if (output !== undefined) run.output = output;
   run.pending = undefined;
   if (!wasTerminal && status === 'completed') {
-    messages.get(`${run.profile}:${run.sessionId}`)?.push({ role: 'assistant', content: run.output, created_at: Date.now() });
+    messages.get(`${run.profile}:${run.sessionId}`)?.push({ id: `msg_${randomUUID().slice(0, 8)}`, role: 'assistant', content: run.output, timestamp: new Date().toISOString() });
   }
   const name = status === 'completed' ? 'run.completed' : status === 'cancelled' ? 'run.cancelled' : 'run.failed';
   emit(run, name, { run_id: run.id, status, output: run.output });
@@ -307,15 +308,23 @@ export const server = createServer(async (req, res) => {
     }
     if (sub === '/chat/stream' && method === 'POST') {
       const payload = await body(req);
-      const input = String(payload.input ?? payload.message ?? '');
-      messages.get(key)?.push({ role: 'user', content: input, created_at: Date.now() });
+      // input 可能是字符串，也可能是 text + image_url parts（官方多模态形状）
+      const rawInput = payload.input ?? payload.message ?? '';
+      const parts = Array.isArray(rawInput) ? (rawInput as { type?: string; text?: string; image_url?: { url?: string } }[]) : [];
+      const images = parts.filter((part) => part.type === 'image_url' && typeof part.image_url?.url === 'string');
+      const badImage = images.find((part) => !/^data:image\/(jpeg|png|webp);base64,/.test(part.image_url?.url ?? ''));
+      if (badImage) return json(res, 400, { error: 'unsupported_content_type' });
+      const input = Array.isArray(rawInput)
+        ? parts.filter((part) => part.type === 'text').map((part) => part.text ?? '').join(' ')
+        : String(rawInput);
+      messages.get(key)?.push({ id: `msg_${randomUUID().slice(0, 8)}`, role: 'user', content: input, timestamp: new Date().toISOString() });
       sseHead(res);
-      const reply = `会话流回复：${input}`;
+      const reply = `会话流回复：${input}${images.length ? `（含 ${images.length} 张图片）` : ''}`;
       for (const [i, piece] of [...reply].entries()) {
         res.write(frame('message.delta', { text: piece, session_id: session.id }, `chunk-${i}`));
         await new Promise((r) => setTimeout(r, 15));
       }
-      messages.get(key)?.push({ role: 'assistant', content: reply, created_at: Date.now() });
+      messages.get(key)?.push({ id: `msg_${randomUUID().slice(0, 8)}`, role: 'assistant', content: reply, timestamp: new Date().toISOString() });
       res.write(frame('run.completed', { status: 'completed', session_id: session.id, output: reply, ...(payload.model ? { model: payload.model } : {}), ...(payload.provider ? { provider: payload.provider } : {}) }));
       res.write('data: [DONE]\n\n');
       return res.end();
@@ -366,7 +375,7 @@ export const server = createServer(async (req, res) => {
     runs.set(run.id, run);
     idempotency.set(`${profile}:${idem}`, run.id);
     idempotency.set(`${profile}:${idem}:fp`, fingerprint);
-    messages.get(`${profile}:${sessionId}`)?.push({ role: 'user', content: run.input, created_at: Date.now() });
+    messages.get(`${profile}:${sessionId}`)?.push({ id: `msg_${randomUUID().slice(0, 8)}`, role: 'user', content: run.input, timestamp: new Date().toISOString() });
     setTimeout(() => advance(run), 200);
     return json(res, 202, { run_id: run.id, status: 'started', ...(run.model ? { model: run.model } : {}), ...(run.provider ? { provider: run.provider } : {}) });
   }

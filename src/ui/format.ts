@@ -1,5 +1,13 @@
 const pad = (value: number) => String(value).padStart(2, '0');
 
+/**
+ * 时间是否可信：服务器没给 timestamp 时适配层用序号占位（0、1、2…），
+ * 这种值不能当真实时间显示，否则会渲染成 1970-01-01 08:00。
+ */
+export function hasKnownTime(timestamp: number | undefined | null): boolean {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 1e11;
+}
+
 export function formatTime(timestamp: number): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return '';
