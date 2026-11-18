@@ -1,7 +1,9 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { Platform, useColorScheme } from 'react-native';
 
 export type ThemeScheme = 'light' | 'dark';
+/** 用户偏好：跟随系统 / 强制浅色 / 强制深色 */
+export type ThemePreference = 'system' | ThemeScheme;
 
 /** 语义色 token：组件里不出现裸 hex。 */
 export interface ThemeColors {
@@ -92,10 +94,54 @@ export const themes: Record<ThemeScheme, Theme> = {
 
 const ThemeContext = createContext<Theme>(themes.light);
 
+/**
+ * 偏好放在模块级小 store 里：ThemeProvider 在 AppServicesProvider 之外，
+ * 拿不到 repository，由设置页/启动同步器写入，Provider 只负责订阅。
+ */
+let preference: ThemePreference = 'system';
+const listeners = new Set<() => void>();
+
+export function getThemePreference(): ThemePreference {
+  return preference;
+}
+
+export function setThemePreference(next: ThemePreference): void {
+  if (preference === next) return;
+  preference = next;
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch {
+      /* 订阅方异常不能影响主题切换 */
+    }
+  }
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** 纯函数：偏好 + 系统配色 → 实际使用的主题。 */
+export function resolveTheme(pref: ThemePreference, systemScheme: ThemeScheme | null | undefined): Theme {
+  const scheme: ThemeScheme = pref === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : pref;
+  return themes[scheme];
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const scheme = useColorScheme();
-  const theme = useMemo(() => (scheme === 'dark' ? themes.dark : themes.light), [scheme]);
+  const systemScheme = useColorScheme();
+  const pref = useSyncExternalStore(subscribe, getThemePreference, getThemePreference);
+  const theme = useMemo(() => resolveTheme(pref, systemScheme), [pref, systemScheme]);
   return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>;
+}
+
+/** 设置页用：读写偏好并立即生效。 */
+export function useThemePreference(): { preference: ThemePreference; setPreference: (next: ThemePreference) => void } {
+  const current = useSyncExternalStore(subscribe, getThemePreference, getThemePreference);
+  const setPreference = useCallback((next: ThemePreference) => setThemePreference(next), []);
+  return { preference: current, setPreference };
 }
 
 export function useTheme(): Theme {
