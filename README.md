@@ -62,6 +62,8 @@ src/storage/              SQLite 仓储、迁移、SecureStore 密钥库
 src/features/             页面逻辑 hooks
 src/ui/                   主题、基础组件、Markdown、工具卡片
 src/media/                图片校验、缩放与 data URI（原生调用集中在 picker.ts）
+src/features/notifications/ 推送桥客户端、重连与本地通知
+bridge/                   自托管推送桥（独立 Node 服务，可单独部署）
 src/features/jobs|skills/ 任务中心与技能页逻辑
 src/ui/diff.ts|diff-view   统一 diff 解析与结构化渲染
 scripts/mock-server.ts    本地 mock（可被测试直接启动）
@@ -87,6 +89,31 @@ tests/stubs/              渲染测试用的 RN / Expo 替身，仅测试生效
 系统分享菜单：从任何 App 分享文本或图片到 MyHermes，会落到同一个入口页——文本预填、图片按现有流程压缩后作为附件，同样不自动发送。
 
 > 分享接收与静态快捷方式需要原生工程，因此要用 `npx expo run:android` 或 dev client；Expo Go 下这些入口不生效（深链仍然可用）。
+
+## 通知（自托管推送桥）
+
+锁屏也能收到任务完成提醒，全程不经过第三方推送服务：
+
+```
+Hermes 服务器 ──HMAC──▶ 你的桥（WebSocket）──▶ 手机本地通知
+```
+
+```bash
+# 1. 在 VPS 上起桥
+cd bridge && npm install
+BRIDGE_SECRET=$(openssl rand -hex 32) PORT=8787 node src/server.mjs
+
+# 2. 在 Hermes 主机上起事件代理
+HERMES_BASE_URL=http://127.0.0.1:8642 API_SERVER_KEY=<key> \
+BRIDGE_URL=https://bridge.example.com BRIDGE_SECRET=<同一个 secret> \
+SERVER_ID='*' node bridge/hermes-agent.mjs
+```
+
+然后在 App 的「设置 → 通知」里填桥地址并打开开关。细节见 [bridge/README.md](bridge/README.md)。
+
+- 桥**不持有** Hermes 的 API Key（Key 只在 Hermes 主机的代理里）
+- 通知默认**不含正文**，只有实例、会话与状态；点开才拉取内容
+- 长连接的固有代价：App 进程被杀就收不到，需要厂商推送才能做到「锁屏必达」
 
 ## 检查
 
