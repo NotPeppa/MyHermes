@@ -1,0 +1,18 @@
+{
+  "name": "myhermes-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MyHermes 自托管推送桥：Hermes 事件 → WebSocket 长连 → 手机本地通知",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "agent": "node hermes-agent.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

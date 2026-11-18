@@ -32,6 +32,9 @@
       ],
       "expo-share-intent": [
         "./stubs/expo-share-intent.tsx"
+      ],
+      "expo-notifications": [
+        "./stubs/expo-notifications.tsx"
       ]
     }
   },

@@ -17,6 +17,7 @@ import type { ServerConnection } from '../src/domain/models';
 
 import JobsScreen from '../app/(main)/jobs/index';
 import SkillsScreen from '../app/(main)/settings/skills';
+import SettingsScreen from '../app/(main)/settings/index';
 
 const vault: CredentialVault = { get: async () => 'key', set: async () => {}, remove: async () => {} };
 
@@ -281,5 +282,27 @@ test('skills 500 但 toolsets 正常：分别提示并照常显示工具集', as
   assert.match(body, /Failed to enumerate skills/, '横幅里要显示服务端原因');
   assert.match(body, /工具集仍然可用/);
   assert.match(body, /terminal/, '工具集条目应照常渲染');
+  await act(async () => tree.unmount());
+});
+
+test('设置页可以切换外观：跟随系统 / 浅色 / 深色', async () => {
+  install({});
+  const tree = await render(createElement(SettingsScreen));
+  const labels = tree.root
+    .findAll((node) => String(node.props?.accessibilityLabel ?? '').startsWith('外观：'))
+    .map((node) => String(node.props.accessibilityLabel));
+  assert.equal(new Set(labels).size, 3, `应有三档外观选项，实际：${labels.join(' | ')}`);
+  assert.ok(labels.some((label) => label.includes('跟随系统') && label.includes('已选中')), '默认跟随系统');
+
+  const dark = tree.root.findAll((node) => String(node.props?.accessibilityLabel ?? '').startsWith('外观：深色'))[0];
+  assert.ok(dark, '应有深色选项');
+  await act(async () => {
+    dark.props.onPress?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  const after = tree.root
+    .findAll((node) => String(node.props?.accessibilityLabel ?? '').startsWith('外观：深色'))
+    .map((node) => String(node.props.accessibilityLabel));
+  assert.ok(after.some((label) => label.includes('已选中')), '选择后应标记为已选中');
   await act(async () => tree.unmount());
 });

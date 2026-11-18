@@ -12,7 +12,7 @@
     "test": "tsx --test tests/*.test.ts && npm run test:render",
     "mock": "tsx scripts/mock-server.ts",
     "e2e": "tsx scripts/e2e-check.ts",
-    "test:render": "tsx --tsconfig tests/tsconfig.render.json --test tests/render.test.tsx tests/p1-render.test.tsx tests/p1-images-render.test.tsx tests/p2-diff-render.test.tsx tests/p2-jobs-render.test.tsx tests/p2-conflict-render.test.tsx tests/android-intents-render.test.tsx tests/onboarding-diagnosis.test.tsx tests/chat-empty-state.test.tsx"
+    "test:render": "tsx --tsconfig tests/tsconfig.render.json --test tests/render.test.tsx tests/p1-render.test.tsx tests/p1-images-render.test.tsx tests/p2-diff-render.test.tsx tests/p2-jobs-render.test.tsx tests/p2-conflict-render.test.tsx tests/android-intents-render.test.tsx tests/onboarding-diagnosis.test.tsx tests/chat-empty-state.test.tsx tests/theme.test.tsx tests/push-render.test.tsx"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -21,9 +21,11 @@
     "expo-image-manipulator": "~58.0.16",
     "expo-image-picker": "~58.0.10",
     "expo-linking": "~58.0.17",
+    "expo-notifications": "^58.1.9",
     "expo-router": "~58.0.31",
     "expo-secure-store": "~58.0.3",
     "expo-share-intent": "^9.0.0",
+    "expo-splash-screen": "~58.0.14",
     "expo-sqlite": "~58.0.17",
     "expo-status-bar": "~58.0.5",
     "expo-system-ui": "~58.0.7",

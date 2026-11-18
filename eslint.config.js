@@ -2,7 +2,8 @@ const expo = require('eslint-config-expo/flat');
 
 module.exports = [
   ...expo,
-  { ignores: ['node_modules/**', '.expo/**', 'dist/**', 'scripts/**', 'tests/**'] },
+  // bridge/ 是独立的 Node 服务（自带 package.json 与运行时），不适用 RN/Expo 规则
+  { ignores: ['node_modules/**', '.expo/**', 'dist/**', 'scripts/**', 'tests/**', 'bridge/**'] },
   {
     rules: {
       // tsc --noEmit 是模块解析的权威检查；ESLint resolver 不认识 RN/Expo 的平台后缀

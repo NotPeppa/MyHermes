@@ -2,17 +2,25 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import { useAppServices } from '@/composition';
 import { describeError } from '@/features/common/errors';
+import { usePushBridge } from '@/features/notifications/usePushBridge';
 import { reportFor } from '@/features/settings/report';
-import { readCacheEnabled, writeCacheEnabled } from '@/features/settings/prefs';
+import { readCacheEnabled, readThemePreference, writeCacheEnabled, writeThemePreference } from '@/features/settings/prefs';
 import { copyText } from '@/ui/clipboard';
 import { ConfirmDialog } from '@/ui/dialogs';
-import { Banner, Button, Caption, ListRow, Screen, ScreenHeader, ScrollScreen, Section, SwitchRow } from '@/ui/primitives';
-import { useTheme } from '@/ui/theme';
+import { Banner, Button, Caption, ListRow, Screen, ScreenHeader, ScrollScreen, Section, SwitchRow, TextField } from '@/ui/primitives';
+import { appIcon } from '@/ui/logo';
+import { useTheme, useThemePreference, type ThemePreference } from '@/ui/theme';
 
 const CLIENT_VERSION = Constants.expoConfig?.version ?? '0.1.0';
+
+const THEME_OPTIONS: { value: ThemePreference; label: string; hint: string }[] = [
+  { value: 'system', label: '跟随系统', hint: '随手机深色模式自动切换' },
+  { value: 'light', label: '浅色', hint: '始终使用浅色主题' },
+  { value: 'dark', label: '深色', hint: '始终使用深色主题' },
+];
 
 const LICENSES: { name: string; license: string }[] = [
   { name: 'MyHermes', license: 'MIT' },
@@ -23,15 +31,58 @@ const LICENSES: { name: string; license: string }[] = [
   { name: '@expo/vector-icons (Ionicons)', license: 'MIT' },
 ];
 
+/** 状态行只有四种说法，避免把内部状态名暴露给用户。 */
+function pushStatusLine(enabled: boolean, bridgeUrl: string, status: string, error: string | null): string {
+  if (!enabled || !bridgeUrl.trim()) return '未启用';
+  if (status === 'connected') return '已连接';
+  if (status === 'error') return `连接失败：${error ?? '原因未知'}`;
+  return '连接中';
+}
+
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { repository } = useAppServices();
+  const { preference: themePreference, setPreference: applyThemePreference } = useThemePreference();
+  const push = usePushBridge();
   const [cacheEnabled, setCacheEnabled] = useState(true);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 地址输入用本地草稿：失焦才提交，避免每敲一个字就重连一次
+  const [bridgeDraft, setBridgeDraft] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBridgeDraft(push.bridgeUrl);
+  }, [push.bridgeUrl]);
+
+  // 启动时把已保存的外观偏好灌进主题 store（Provider 在 AppServicesProvider 之外，读不到 repository）
+  useEffect(() => {
+    let alive = true;
+    void readThemePreference(repository)
+      .then((stored) => {
+        if (alive) applyThemePreference(stored);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [applyThemePreference, repository]);
+
+  const chooseTheme = useCallback(
+    async (next: ThemePreference) => {
+      applyThemePreference(next);
+      try {
+        await writeThemePreference(repository, next);
+      } catch (themeError) {
+        setError(describeError(themeError));
+      }
+    },
+    [applyThemePreference, repository],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -105,6 +156,70 @@ export default function SettingsScreen() {
           </Banner>
         ) : null}
 
+        <Section title="外观">
+          <View style={{ flexDirection: 'row', gap: theme.space.sm }}>
+            {THEME_OPTIONS.map((option) => (
+              <View key={option.value} style={{ flex: 1 }}>
+                <Button
+                  label={option.label}
+                  variant={themePreference === option.value ? 'primary' : 'secondary'}
+                  onPress={() => void chooseTheme(option.value)}
+                  accessibilityLabel={`外观：${option.label}${themePreference === option.value ? '，已选中' : ''}`}
+                  accessibilityHint={option.hint}
+                  style={{ minWidth: 0 }}
+                />
+              </View>
+            ))}
+          </View>
+          <Caption>跟随系统时会随手机的深色模式自动切换；强制选项只影响本应用。</Caption>
+        </Section>
+
+        <Section title="通知">
+          <SwitchRow
+            label="启用推送通知"
+            description="App 在后台或锁屏时，通过你自己部署的推送桥接收任务完成提醒。"
+            value={push.enabled}
+            onValueChange={push.setEnabled}
+          />
+          <TextField
+            label="推送桥地址"
+            value={bridgeDraft}
+            onChangeText={setBridgeDraft}
+            onBlur={() => push.setBridgeUrl(bridgeDraft)}
+            placeholder="https://bridge.example.com"
+            keyboardType="url"
+            autoComplete="url"
+            textContentType="URL"
+            helper="填自托管桥的 HTTPS 地址；WebSocket 密钥走 query，必须走 TLS。"
+            accessibilityHint="例如 https://bridge.example.com"
+          />
+          <Text
+            accessibilityLabel={`推送状态：${pushStatusLine(push.enabled, push.bridgeUrl, push.status, push.error)}`}
+            accessibilityLiveRegion="polite"
+            style={{ color: theme.colors.textMuted, fontSize: theme.font.body }}
+          >
+            {`状态：${pushStatusLine(push.enabled, push.bridgeUrl, push.status, push.error)}`}
+          </Text>
+          <Button
+            label="测试连接"
+            variant="secondary"
+            icon="pulse-outline"
+            busy={testing}
+            onPress={() => {
+              setTesting(true);
+              setTestResult(null);
+              void push.testConnection(bridgeDraft).then((result) => {
+                setTestResult(result);
+                setTesting(false);
+              });
+            }}
+            accessibilityLabel="测试推送桥连接"
+            accessibilityHint="请求桥的 /health，确认地址与网络可达"
+          />
+          {testResult ? <Caption>{testResult}</Caption> : null}
+          <Caption>通知只包含实例、会话与状态；正文需要点开 App 查看。桥由你自己部署。</Caption>
+        </Section>
+
         <Section title="实例">
           <ListRow
             title="实例管理"
@@ -176,7 +291,22 @@ export default function SettingsScreen() {
         </Section>
 
         <Section title="关于">
-          <ListRow title="MyHermes" subtitle={`版本 ${CLIENT_VERSION}`} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.md }}>
+            {appIcon === null ? null : (
+              <Image
+                source={appIcon}
+                accessibilityLabel="MyHermes 应用图标"
+                style={{ width: 56, height: 56, borderRadius: theme.radius.md }}
+              />
+            )}
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>MyHermes</Text>
+              <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
+                {`版本 ${CLIENT_VERSION} · Hermes Agent 移动客户端`}
+              </Text>
+            </View>
+          </View>
+          <ListRow title="版本" subtitle={CLIENT_VERSION} />
           <ListRow title="许可证" subtitle="MIT（详见仓库 LICENSE）" />
           <View style={{ gap: theme.space.xs }}>
             <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>

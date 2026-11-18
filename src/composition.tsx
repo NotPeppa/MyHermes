@@ -5,6 +5,11 @@ import { createRepository } from '@/storage/sqlite';
 import { createVault } from '@/storage/vault';
 import { HermesService } from '@/runtime/service';
 import { describeError } from '@/features/common/errors';
+import { readPushConfig } from '@/features/notifications/config';
+import { deliverPushNotification, useNotificationTaps } from '@/features/notifications/notify';
+import { sharedPushBridge, stopSharedPushBridge } from '@/features/notifications/service';
+import { readThemePreference } from '@/features/settings/prefs';
+import { setThemePreference } from '@/ui/theme';
 
 export interface AppServices {
   repository: Repository;
@@ -48,6 +53,10 @@ let initPromise: Promise<void> | null = null;
 function startInit(services: AppServices): Promise<void> {
   initPromise ??= (async () => {
     await services.repository.init();
+    // 外观偏好要在首屏前生效，否则重启后会先闪一下系统配色
+    await readThemePreference(services.repository)
+      .then(setThemePreference)
+      .catch(() => undefined);
     // 待删密钥的清理失败不能阻塞启动，下次进入设置页会继续重试
     await flushPendingCredentialDeletes(services.repository, services.vault).catch(() => undefined);
   })().catch((error: unknown) => {
@@ -68,6 +77,9 @@ export function useAppInit(): AppInitState {
   const [state, setState] = useState<{ ready: boolean; error: string | null }>({ ready: false, error: null });
   const [attempt, setAttempt] = useState(0);
 
+  // 点通知进对应会话：全 App 只注册一次
+  useNotificationTaps();
+
   useEffect(() => {
     let alive = true;
     setState({ ready: false, error: null });
@@ -83,6 +95,29 @@ export function useAppInit(): AppInitState {
       alive = false;
     };
   }, [attempt, services]);
+
+  // 初始化完成后恢复推送长连接：失败只记录状态，不阻塞启动
+  useEffect(() => {
+    if (!state.ready) return;
+    let alive = true;
+    let detach: (() => void) | null = null;
+    void (async () => {
+      const config = await readPushConfig(services.repository).catch(() => null);
+      if (!alive || !config?.enabled || !config.bridgeUrl) return;
+      const bridge = sharedPushBridge({
+        repository: services.repository,
+        vault: services.vault,
+        baseUrl: config.bridgeUrl,
+      });
+      detach = bridge.onEvent((event) => void deliverPushNotification(event));
+      await bridge.start().catch(() => undefined);
+    })();
+    return () => {
+      alive = false;
+      detach?.();
+      stopSharedPushBridge();
+    };
+  }, [services, state.ready]);
 
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
   return { ...state, retry };

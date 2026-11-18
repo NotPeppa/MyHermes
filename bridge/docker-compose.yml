@@ -1,0 +1,11 @@
+# 一条命令起桥：把 .env 里的 HERMES_API_KEY 填好，然后 docker compose up -d
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # 只给本机反代用；要直接对外改成 "8787:8787" 并自行加 TLS
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./data:/data
