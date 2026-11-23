@@ -7,7 +7,7 @@ import { HermesService } from '@/runtime/service';
 import { describeError } from '@/features/common/errors';
 import { readPushConfig } from '@/features/notifications/config';
 import { deliverPushNotification, useNotificationTaps } from '@/features/notifications/notify';
-import { sharedPushBridge, stopSharedPushBridge } from '@/features/notifications/service';
+import { onSharedPushEvent, sharedPushBridge, stopSharedPushBridge } from '@/features/notifications/service';
 import { readThemePreference } from '@/features/settings/prefs';
 import { setThemePreference } from '@/ui/theme';
 
@@ -77,8 +77,15 @@ export function useAppInit(): AppInitState {
   const [state, setState] = useState<{ ready: boolean; error: string | null }>({ ready: false, error: null });
   const [attempt, setAttempt] = useState(0);
 
-  // 点通知进对应会话：全 App 只注册一次
-  useNotificationTaps();
+  // 点通知进对应会话：全 App 只注册一次（等初始化完成后才处理冷启动点击）
+  useNotificationTaps(services.repository, state.ready);
+
+  // 全局推送事件投递：无论在启动时还是设置页首次开启/换地址，都转发给本地通知
+  useEffect(() => {
+    return onSharedPushEvent((event) => {
+      void deliverPushNotification(event);
+    });
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -100,7 +107,6 @@ export function useAppInit(): AppInitState {
   useEffect(() => {
     if (!state.ready) return;
     let alive = true;
-    let detach: (() => void) | null = null;
     void (async () => {
       const config = await readPushConfig(services.repository).catch(() => null);
       if (!alive || !config?.enabled || !config.bridgeUrl) return;
@@ -109,12 +115,10 @@ export function useAppInit(): AppInitState {
         vault: services.vault,
         baseUrl: config.bridgeUrl,
       });
-      detach = bridge.onEvent((event) => void deliverPushNotification(event));
       await bridge.start().catch(() => undefined);
     })();
     return () => {
       alive = false;
-      detach?.();
       stopSharedPushBridge();
     };
   }, [services, state.ready]);

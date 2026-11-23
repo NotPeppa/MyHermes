@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppServices } from '@/composition';
 import { describeError } from '@/features/common/errors';
 import { fetchHealth } from './client';
@@ -24,6 +24,8 @@ export function usePushBridge(): PushBridgeHook {
   const [status, setStatus] = useState<PushStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const toggleGenRef = useRef(0);
+  const prevUrlRef = useRef('');
 
   useEffect(() => {
     let alive = true;
@@ -32,6 +34,7 @@ export function usePushBridge(): PushBridgeHook {
         if (!alive) return;
         setEnabledState(config.enabled);
         setBridgeUrlState(config.bridgeUrl);
+        prevUrlRef.current = config.bridgeUrl.trim();
       })
       .catch(() => undefined)
       .finally(() => {
@@ -65,22 +68,35 @@ export function usePushBridge(): PushBridgeHook {
 
   const setBridgeUrl = useCallback(
     (url: string) => {
+      const trimmed = url.trim();
+      const changed = prevUrlRef.current !== trimmed;
+      prevUrlRef.current = trimmed;
       setBridgeUrlState(url);
       setError(null);
-      void writePushConfig(repository, { bridgeUrl: url }).catch((writeError: unknown) => {
-        setError(describeError(writeError));
-      });
+      void (async () => {
+        try {
+          if (changed) {
+            // 更换推送桥地址前先撤销/清理旧桥的设备凭据，避免拿旧密钥去连新桥
+            await unregisterPushDevice({ repository, vault }).catch(() => undefined);
+          }
+          await writePushConfig(repository, { bridgeUrl: url });
+        } catch (writeError: unknown) {
+          setError(describeError(writeError));
+        }
+      })();
     },
-    [repository],
+    [repository, vault],
   );
 
   const setEnabled = useCallback(
     (next: boolean) => {
+      const gen = ++toggleGenRef.current;
       setEnabledState(next);
       setError(null);
       void (async () => {
         try {
           await writePushConfig(repository, { enabled: next });
+          if (toggleGenRef.current !== gen) return;
           if (next) {
             await requestPushPermission();
             return;
@@ -89,7 +105,7 @@ export function usePushBridge(): PushBridgeHook {
           setStatus('idle');
           await unregisterPushDevice({ repository, vault });
         } catch (toggleError) {
-          setError(describeError(toggleError));
+          if (toggleGenRef.current === gen) setError(describeError(toggleError));
         }
       })();
     },

@@ -61,6 +61,8 @@ export class PushBridge {
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private running = false;
+  private sessionGen = 0;
+  private reusedCredential = false;
   private current: PushBridgeState = { status: 'idle', error: null };
   private stateListeners = new Set<(state: PushBridgeState) => void>();
   private eventListeners = new Set<(event: BridgeEvent) => void>();
@@ -92,12 +94,14 @@ export class PushBridge {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const gen = ++this.sessionGen;
     this.attempt = 0;
-    await this.open();
+    await this.open(gen);
   }
 
   stop(): void {
     this.running = false;
+    this.sessionGen += 1;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -128,15 +132,15 @@ export class PushBridge {
   }
 
   /** 先注册拿设备密钥（本地没有时），再连 WS。 */
-  private async open(): Promise<void> {
+  private async open(gen: number): Promise<void> {
     try {
       const credential = await this.credential();
-      if (!this.running) return;
-      this.connect(credential);
+      if (!this.running || this.sessionGen !== gen) return;
+      this.connect(credential, gen);
     } catch (error) {
-      if (!this.running) return;
+      if (!this.running || this.sessionGen !== gen) return;
       this.setState('error', describeError(error));
-      this.scheduleReconnect();
+      this.scheduleReconnect(gen);
     }
   }
 
@@ -144,8 +148,12 @@ export class PushBridge {
     const config = await readPushConfig(this.deps.repository);
     if (config.deviceId) {
       const secret = await this.deps.vault.get(pushSecretRef(config.deviceId));
-      if (secret) return { deviceId: config.deviceId, secret };
+      if (secret) {
+        this.reusedCredential = true;
+        return { deviceId: config.deviceId, secret };
+      }
     }
+    this.reusedCredential = false;
     const registered = await registerDevice(
       {
         baseUrl: this.deps.baseUrl,
@@ -160,11 +168,19 @@ export class PushBridge {
     return registered;
   }
 
-  private connect(credential: { deviceId: string; secret: string }): void {
+  private async invalidateCredential(): Promise<void> {
+    const config = await readPushConfig(this.deps.repository).catch(() => null);
+    if (!config?.deviceId) return;
+    await this.deps.vault.remove(pushSecretRef(config.deviceId)).catch(() => undefined);
+    await writePushConfig(this.deps.repository, { deviceId: null }).catch(() => undefined);
+  }
+
+  private connect(credential: { deviceId: string; secret: string }, gen: number): void {
+    this.drop();
     const Ctor = this.deps.socket ?? (globalThis.WebSocket as unknown as SocketCtor | undefined);
     if (!Ctor) {
       this.setState('error', '当前运行环境没有 WebSocket');
-      this.scheduleReconnect();
+      this.scheduleReconnect(gen);
       return;
     }
     this.setState('connecting', null);
@@ -173,31 +189,46 @@ export class PushBridge {
       socket = new Ctor(bridgeSocketUrl(this.deps.baseUrl, credential.deviceId, credential.secret));
     } catch (error) {
       this.setState('error', describeError(error));
-      this.scheduleReconnect();
+      this.scheduleReconnect(gen);
       return;
     }
     this.socket = socket;
+    let opened = false;
     this.connectTimer = setTimeout(() => {
       this.connectTimer = null;
-      if (!this.running || this.socket !== socket || this.current.status === 'connected') return;
+      if (!this.running || this.sessionGen !== gen || this.socket !== socket || this.current.status === 'connected') return;
       this.drop();
       this.setState('error', '推送桥连接超时');
-      this.scheduleReconnect();
+      this.scheduleReconnect(gen);
     }, this.deps.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
     socket.onopen = () => {
+      if (this.socket !== socket || this.sessionGen !== gen) return;
+      opened = true;
+      this.reusedCredential = false;
       this.clearConnectTimer();
       this.attempt = 0;
       this.setState('connected', null);
     };
-    socket.onmessage = (message) => this.receive(message.data);
+    socket.onmessage = (message) => {
+      if (this.socket !== socket || this.sessionGen !== gen) return;
+      this.receive(message.data);
+    };
     // onerror 之后浏览器/RN 一定会给 onclose，重连只在 onclose 里做，避免双重重连
     socket.onerror = () => undefined;
     socket.onclose = () => {
       this.clearConnectTimer();
-      if (this.socket !== socket) return;
+      if (this.socket !== socket || this.sessionGen !== gen) return;
       this.socket = null;
       this.setState('error', '推送连接已断开');
-      this.scheduleReconnect();
+      // 若复用了旧设备凭据但握手从未成功（例如换桥地址、桥重装或被撤销返回 401），清空旧凭据后重注册
+      if (!opened && this.reusedCredential) {
+        this.reusedCredential = false;
+        void this.invalidateCredential().finally(() => {
+          if (this.running && this.sessionGen === gen) this.scheduleReconnect(gen);
+        });
+        return;
+      }
+      this.scheduleReconnect(gen);
     };
   }
 
@@ -213,14 +244,14 @@ export class PushBridge {
     else if (message.kind === 'hello') for (const event of message.pending) this.emit(event);
   }
 
-  private scheduleReconnect(): void {
-    if (!this.running || this.timer) return;
+  private scheduleReconnect(gen: number): void {
+    if (!this.running || this.sessionGen !== gen || this.timer) return;
     const delay = reconnectDelay(this.attempt, this.deps.random);
     this.attempt += 1;
     this.timer = setTimeout(() => {
       this.timer = null;
-      if (!this.running) return;
-      void this.open();
+      if (!this.running || this.sessionGen !== gen) return;
+      void this.open(gen);
     }, delay);
   }
 
@@ -242,6 +273,15 @@ export class PushBridge {
 }
 
 let shared: PushBridge | null = null;
+const sharedEventListeners = new Set<(event: BridgeEvent) => void>();
+
+/** 注册全局推送事件监听：无论共享桥何时创建或切换地址重建，都会自动转发事件。 */
+export function onSharedPushEvent(listener: (event: BridgeEvent) => void): () => void {
+  sharedEventListeners.add(listener);
+  return () => {
+    sharedEventListeners.delete(listener);
+  };
+}
 
 /** 整个 App 只保留一条推送连接：组合根与设置页共用同一个实例。 */
 export function sharedPushBridge(deps: PushBridgeDeps): PushBridge {
@@ -249,7 +289,19 @@ export function sharedPushBridge(deps: PushBridgeDeps): PushBridge {
     shared.stop();
     shared = null;
   }
-  shared ??= new PushBridge(deps);
+  if (!shared) {
+    const instance = new PushBridge(deps);
+    instance.onEvent((event) => {
+      for (const listener of [...sharedEventListeners]) {
+        try {
+          listener(event);
+        } catch {
+          /* 投递失败不影响后续监听 */
+        }
+      }
+    });
+    shared = instance;
+  }
   return shared;
 }
 
@@ -268,10 +320,10 @@ export async function unregisterPushDevice(deps: {
   fetchImpl?: FetchLike;
 }): Promise<void> {
   const config = await readPushConfig(deps.repository);
-  if (!config.bridgeUrl || !config.deviceId) return;
+  if (!config.deviceId) return;
   const ref = pushSecretRef(config.deviceId);
   const secret = await deps.vault.get(ref).catch(() => null);
-  if (secret) {
+  if (secret && config.bridgeUrl) {
     await unregisterDevice(
       { baseUrl: config.bridgeUrl, deviceId: config.deviceId, secret },
       deps.fetchImpl ?? defaultFetch,

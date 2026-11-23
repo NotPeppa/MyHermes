@@ -41,6 +41,7 @@ async function pushEvents(events) {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-bridge-timestamp': ts, 'x-bridge-signature': signature },
     body: raw,
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`bridge ${res.status}: ${await res.text()}`);
   const result = await res.json();

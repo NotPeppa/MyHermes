@@ -78,6 +78,7 @@ export function createPoller({
   const request = (path) =>
     fetchImpl(`${hermesBaseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15_000),
     });
 
   async function listSessions() {
@@ -97,9 +98,10 @@ export function createPoller({
     return Array.isArray(body) ? body : (body.data ?? body.messages ?? []);
   }
 
-  /** 跑一轮，返回本轮新产生的事件（已去重）。 */
+  /** 跑一轮，返回本轮新产生的事件（已去重）。先投递成功再记 seen 并落盘，避免瞬断丢消息。 */
   async function tick() {
     const events = [];
+    const batchSeen = new Set();
     for (const session of await listSessions()) {
       let messages;
       try {
@@ -111,8 +113,8 @@ export function createPoller({
         if (!isNotifiable(message)) continue;
         const messageId = messageFingerprint(message);
         const eventId = `${serverId}:${session.id}:${messageId}`;
-        if (state.seen.has(eventId)) continue;
-        state.seen.add(eventId);
+        if (state.seen.has(eventId) || batchSeen.has(eventId)) continue;
+        batchSeen.add(eventId);
         const preview = previewOf(message, includePreview);
         events.push({
           eventId,
@@ -125,8 +127,14 @@ export function createPoller({
         });
       }
     }
-    saveState(state, statePath);
-    if (events.length) await onEvents(events);
+    if (events.length) {
+      await onEvents(events);
+      for (const id of batchSeen) state.seen.add(id);
+      if (state.seen.size > 2000) {
+        state.seen = new Set([...state.seen].slice(-2000));
+      }
+      saveState(state, statePath);
+    }
     return events;
   }
 
@@ -142,6 +150,7 @@ export function createPoller({
         } catch (error) {
           log('poller error:', error.message);
         }
+        if (!running) return;
         timer = setTimeout(loop, pollMs);
       };
       void loop();

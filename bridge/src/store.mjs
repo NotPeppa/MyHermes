@@ -54,9 +54,15 @@ export function openStore(path = ':memory:') {
 
   const api = {
     db,
-    /** 注册设备：同一 deviceId 重复注册会轮换密钥（换机/重装）。 */
-    registerDevice({ deviceId, platform, serverId, serverAlias, deviceName, now = Date.now() }) {
-      const id = deviceId?.trim() || `dev_${randomBytes(9).toString('hex')}`;
+    /** 注册设备：未传 deviceId 时分配新 ID；已存在时只允许校验通过后轮换，不允许未鉴权覆盖。 */
+    registerDevice({ deviceId, platform, serverId, serverAlias, deviceName, now = Date.now(), allowOverwrite = false }) {
+      const id = typeof deviceId === 'string' && deviceId.trim() ? deviceId.trim() : `dev_${randomBytes(9).toString('hex')}`;
+      const existing = api.db.prepare('SELECT device_id FROM devices WHERE device_id = ?').get(id);
+      if (existing && !allowOverwrite) {
+        const error = new Error('device_already_exists');
+        error.code = 'CONFLICT';
+        throw error;
+      }
       const secret = randomBytes(32).toString('hex');
       api.db
         .prepare(
@@ -71,15 +77,24 @@ export function openStore(path = ':memory:') {
              last_seen_at = excluded.last_seen_at,
              revoked_at = NULL`,
         )
-        .run(id, platform, serverId, serverAlias ?? null, deviceName ?? null, hashSecret(secret), now, now);
+        .run(
+          id,
+          String(platform),
+          String(serverId),
+          typeof serverAlias === 'string' ? serverAlias : null,
+          typeof deviceName === 'string' ? deviceName : null,
+          hashSecret(secret),
+          now,
+          now,
+        );
       return { deviceId: id, secret };
     },
     getDevice(deviceId) {
-      return api.db.prepare('SELECT * FROM devices WHERE device_id = ?').get(deviceId) ?? null;
+      return api.db.prepare('SELECT * FROM devices WHERE device_id = ? AND revoked_at IS NULL').get(deviceId) ?? null;
     },
     listDevices(serverId) {
-      return serverId
-        ? api.db.prepare('SELECT * FROM devices WHERE server_id = ? AND revoked_at IS NULL').all(serverId)
+      return serverId && serverId !== '*'
+        ? api.db.prepare("SELECT * FROM devices WHERE (server_id = ? OR server_id = '*') AND revoked_at IS NULL").all(serverId)
         : api.db.prepare('SELECT * FROM devices WHERE revoked_at IS NULL').all();
     },
     revokeDevice(deviceId, now = Date.now()) {

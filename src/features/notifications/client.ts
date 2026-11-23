@@ -162,6 +162,6 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
 
 /** WS 无法可靠设置自定义头，密钥走 query——桥必须跑在 TLS 后面。 */
 export function bridgeSocketUrl(baseUrl: string, deviceId: string, secret: string): string {
-  const base = trimSlash(baseUrl).replace(/^http/, 'ws');
+  const base = trimSlash(baseUrl).replace(/^http/i, 'ws');
   return `${base}/ws?deviceId=${encodeURIComponent(deviceId)}&secret=${encodeURIComponent(secret)}`;
 }

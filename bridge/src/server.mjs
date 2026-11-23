@@ -52,114 +52,149 @@ export function createBridge({ secret, dbPath = ':memory:', now = () => Date.now
   const sockets = new Map();
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-    const method = req.method ?? 'GET';
+    try {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const method = req.method ?? 'GET';
 
-    if (url.pathname === '/health' && method === 'GET') {
-      return json(res, 200, { ok: true, connected: [...sockets.values()].reduce((n, set) => n + set.size, 0), ...store.stats() });
-    }
-
-    if (url.pathname === '/register' && method === 'POST') {
-      let body;
-      try {
-        body = await readBody(req);
-      } catch {
-        return json(res, 400, { error: 'invalid_body' });
+      if (url.pathname === '/health' && method === 'GET') {
+        return json(res, 200, { ok: true, connected: [...sockets.values()].reduce((n, set) => n + set.size, 0), ...store.stats() });
       }
-      if (!body.platform || !body.serverId) return json(res, 400, { error: 'platform_and_serverId_required' });
-      const device = store.registerDevice({
-        deviceId: body.deviceId,
-        platform: body.platform,
-        serverId: body.serverId,
-        serverAlias: body.serverAlias,
-        deviceName: body.deviceName,
-        now: now(),
-      });
-      log('register', device.deviceId, body.platform);
-      return json(res, 200, device);
-    }
 
-    const revoke = /^\/register\/([^/]+)$/.exec(url.pathname);
-    if (revoke && method === 'DELETE') {
-      const device = store.getDevice(revoke[1]);
-      const auth = bearer(req);
-      if (!device || !secretMatches(auth, device.secret_hash)) return json(res, 401, { error: 'unauthorized' });
-      store.revokeDevice(device.device_id, now());
-      for (const socket of sockets.get(device.device_id) ?? []) socket.close(4001, 'revoked');
-      sockets.delete(device.device_id);
-      return json(res, 200, { ok: true });
-    }
-
-    if (url.pathname === '/events' && method === 'POST') {
-      // 单进程模式下桥自己轮询，不需要外部 agent，也就不需要共享密钥
-      if (!secret) return json(res, 503, { error: 'external_agent_disabled' });
-      const raw = await readRaw(req).catch(() => null);
-      if (raw === null) return json(res, 400, { error: 'invalid_body' });
-      const failure = verifySignature({
-        secret,
-        timestamp: req.headers['x-bridge-timestamp'],
-        signature: req.headers['x-bridge-signature'],
-        rawBody: raw,
-        now: now(),
-      });
-      if (failure) return json(res, 401, { error: failure });
-      let body;
-      try {
-        body = JSON.parse(raw || '{}');
-      } catch {
-        return json(res, 400, { error: 'invalid_json' });
+      if (url.pathname === '/register' && method === 'POST') {
+        let body;
+        try {
+          body = await readBody(req);
+        } catch {
+          return json(res, 400, { error: 'invalid_body' });
+        }
+        if (typeof body?.platform !== 'string' || !body.platform.trim() || typeof body?.serverId !== 'string' || !body.serverId.trim()) {
+          return json(res, 400, { error: 'platform_and_serverId_required' });
+        }
+        if (body.deviceId !== undefined && typeof body.deviceId !== 'string') {
+          return json(res, 400, { error: 'invalid_deviceId' });
+        }
+        let allowOverwrite = false;
+        if (typeof body.deviceId === 'string' && body.deviceId.trim()) {
+          const existing = store.getDevice(body.deviceId.trim());
+          if (existing) {
+            const auth = bearer(req);
+            if (!secretMatches(auth, existing.secret_hash)) {
+              return json(res, 401, { error: 'unauthorized' });
+            }
+            allowOverwrite = true;
+          }
+        }
+        let device;
+        try {
+          device = store.registerDevice({
+            deviceId: body.deviceId,
+            platform: body.platform.trim(),
+            serverId: body.serverId.trim(),
+            serverAlias: typeof body.serverAlias === 'string' ? body.serverAlias : undefined,
+            deviceName: typeof body.deviceName === 'string' ? body.deviceName : undefined,
+            now: now(),
+            allowOverwrite,
+          });
+        } catch (err) {
+          if (err?.code === 'CONFLICT') return json(res, 409, { error: 'device_already_exists' });
+          throw err;
+        }
+        log('register', device.deviceId, body.platform);
+        return json(res, 200, device);
       }
-      const events = Array.isArray(body.events) ? body.events : [];
-      let accepted = 0;
-      let delivered = 0;
-      for (const event of events) {
-        if (!event?.eventId || !event?.serverId || !event?.state) continue;
-        const result = store.ingestEvent(event, now());
-        if (!result.fresh) continue;
-        accepted += 1;
-        delivered += fanout(event);
-      }
-      return json(res, 200, { accepted, delivered });
-    }
 
-    if (url.pathname === '/events' && method === 'GET') {
-      // 轮询兜底：WebSocket 被系统掐断时，App 可以主动拉未投递事件
-      const device = store.getDevice(url.searchParams.get('deviceId') ?? '');
-      if (!device || !secretMatches(url.searchParams.get('secret') ?? '', device.secret_hash)) {
-        return json(res, 401, { error: 'unauthorized' });
+      const revoke = /^\/register\/([^/]+)$/.exec(url.pathname);
+      if (revoke && method === 'DELETE') {
+        const device = store.getDevice(revoke[1]);
+        const auth = bearer(req);
+        if (!device || !secretMatches(auth, device.secret_hash)) return json(res, 401, { error: 'unauthorized' });
+        store.revokeDevice(device.device_id, now());
+        for (const socket of sockets.get(device.device_id) ?? []) socket.close(4001, 'revoked');
+        sockets.delete(device.device_id);
+        return json(res, 200, { ok: true });
       }
-      const pending = store.pendingFor(device.device_id, 20);
-      store.markDelivered(pending.map((event) => event.event_id), device.device_id, now());
-      store.touchDevice(device.device_id, now());
-      return json(res, 200, { events: pending.map(toWire) });
-    }
 
-    return json(res, 404, { error: 'not_found' });
+      if (url.pathname === '/events' && method === 'POST') {
+        // 单进程模式下桥自己轮询，不需要外部 agent，也就不需要共享密钥
+        if (!secret) return json(res, 503, { error: 'external_agent_disabled' });
+        const raw = await readRaw(req).catch(() => null);
+        if (raw === null) return json(res, 400, { error: 'invalid_body' });
+        const failure = verifySignature({
+          secret,
+          timestamp: req.headers['x-bridge-timestamp'],
+          signature: req.headers['x-bridge-signature'],
+          rawBody: raw,
+          now: now(),
+        });
+        if (failure) return json(res, 401, { error: failure });
+        let body;
+        try {
+          body = JSON.parse(raw || '{}');
+        } catch {
+          return json(res, 400, { error: 'invalid_json' });
+        }
+        const events = Array.isArray(body.events) ? body.events : [];
+        let accepted = 0;
+        let delivered = 0;
+        for (const event of events) {
+          if (!event?.eventId || !event?.serverId || !event?.state) continue;
+          const result = store.ingestEvent(event, now());
+          if (!result.fresh) continue;
+          accepted += 1;
+          delivered += fanout(event);
+        }
+        return json(res, 200, { accepted, delivered });
+      }
+
+      if (url.pathname === '/events' && method === 'GET') {
+        // 轮询兜底：WebSocket 被系统掐断时，App 可以主动拉未投递事件
+        const device = store.getDevice(url.searchParams.get('deviceId') ?? '');
+        if (!device || !secretMatches(url.searchParams.get('secret') ?? '', device.secret_hash)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+        const pending = store.pendingFor(device.device_id, 50);
+        store.markDelivered(pending.map((event) => event.event_id), device.device_id, now());
+        store.touchDevice(device.device_id, now());
+        return json(res, 200, { events: pending.map(toWire) });
+      }
+
+      return json(res, 404, { error: 'not_found' });
+    } catch (error) {
+      log('http-error', error?.message ?? String(error));
+      if (!res.headersSent) return json(res, 500, { error: 'internal_error' });
+    }
   });
 
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-    if (url.pathname !== '/ws') return socket.destroy();
-    const device = store.getDevice(url.searchParams.get('deviceId') ?? '');
-    // WS 无法可靠设置自定义头，改用 query 传密钥；桥必须跑在 TLS 后面
-    if (!device || !secretMatches(url.searchParams.get('secret') ?? '', device.secret_hash)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      return socket.destroy();
+    try {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (url.pathname !== '/ws') return socket.destroy();
+      const device = store.getDevice(url.searchParams.get('deviceId') ?? '');
+      // WS 无法可靠设置自定义头，改用 query 传密钥；桥必须跑在 TLS 后面
+      if (!device || !secretMatches(url.searchParams.get('secret') ?? '', device.secret_hash)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        return socket.destroy();
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.deviceId = device.device_id;
+        wss.emit('connection', ws, req);
+      });
+    } catch {
+      socket.destroy();
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      ws.deviceId = device.device_id;
-      wss.emit('connection', ws, req);
-    });
   });
 
   wss.on('connection', (ws) => {
+    ws.on('error', () => {
+      /* 防止单条畸形帧导致未捕获 error 事件退出进程 */
+    });
     const set = sockets.get(ws.deviceId) ?? new Set();
     set.add(ws);
     sockets.set(ws.deviceId, set);
     store.touchDevice(ws.deviceId, now());
-    const pending = store.pendingFor(ws.deviceId, 20);
+    const pending = store.pendingFor(ws.deviceId, 100);
     ws.send(JSON.stringify({ type: 'hello', pending: pending.map(toWire) }));
     store.markDelivered(pending.map((event) => event.event_id), ws.deviceId, now());
     log('ws-open', ws.deviceId, `pending=${pending.length}`);
@@ -186,16 +221,20 @@ export function createBridge({ secret, dbPath = ':memory:', now = () => Date.now
    */
   function fanout(event) {
     let delivered = 0;
-    for (const device of store.listDevices(event.serverId === '*' ? undefined : event.serverId)) {
+    for (const device of store.listDevices(event.serverId)) {
       const set = sockets.get(device.device_id);
       if (!set?.size) continue;
       const payload = JSON.stringify({ type: 'event', event: toWire(event) });
+      let sent = 0;
       for (const ws of set) {
         if (ws.readyState !== ws.OPEN) continue;
         ws.send(payload);
-        delivered += 1;
+        sent += 1;
       }
-      store.markDelivered([event.eventId], device.device_id, now());
+      if (sent > 0) {
+        delivered += sent;
+        store.markDelivered([event.eventId], device.device_id, now());
+      }
     }
     return delivered;
   }
