@@ -40,6 +40,7 @@
           "scheme": "myhermes"
         }
       ],
+      "./plugins/withAndroidIconFix",
       [
         "expo-share-intent",
         {
