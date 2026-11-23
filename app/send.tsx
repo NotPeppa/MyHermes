@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useAppServices } from '@/composition';
 import { describeError } from '@/features/common/errors';
-import { normalizeIntentText, peekPendingIntent, setPendingIntent } from '@/features/intents/pending';
+import { clearPendingIntent, normalizeIntentText, peekPendingIntent, setPendingIntent } from '@/features/intents/pending';
 import { resolveTarget } from '@/features/intents/send-intent';
 import { readActiveServerId } from '@/features/settings/prefs';
 import { readClipboardText } from '@/ui/clipboard';
@@ -20,7 +20,7 @@ import { useTheme } from '@/ui/theme';
 export default function SendIntentScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { repository } = useAppServices();
+  const { repository, service } = useAppServices();
   const params = useLocalSearchParams<{ text?: string; server?: string; source?: string }>();
   const [error, setError] = useState<string | null>(null);
 
@@ -37,16 +37,26 @@ export default function SendIntentScreen() {
         if (!alive) return;
 
         if (result.kind === 'no_server') {
+          if (shared) clearPendingIntent();
           setError('还没有添加任何 Hermes 实例。请先在连接页添加实例，再来使用外部入口。');
           return;
         }
         if (result.kind === 'unknown_server') {
+          if (shared) clearPendingIntent();
           setError(`找不到实例 ${result.serverId}。请检查深链里的 server 参数，或先在设置里添加该实例。`);
           return;
         }
         if (!text && !shared?.imageUri) {
+          if (shared) clearPendingIntent();
           setError(fromClipboard ? '剪贴板里没有可用文本。' : '这次外部入口没有带上文本或图片。');
           return;
+        }
+
+        let targetSessionId = result.sessionId;
+        if (!targetSessionId) {
+          const created = await service.createSession(result.serverId);
+          if (!alive) return;
+          targetSessionId = created.id;
         }
 
         setPendingIntent({
@@ -57,7 +67,7 @@ export default function SendIntentScreen() {
         });
         router.replace({
           pathname: '/(main)/chat/[serverId]/[sessionId]',
-          params: { serverId: result.serverId, sessionId: result.sessionId ?? '' },
+          params: { serverId: result.serverId, sessionId: targetSessionId },
         });
       } catch (error_) {
         if (alive) setError(describeError(error_));
@@ -66,7 +76,7 @@ export default function SendIntentScreen() {
     return () => {
       alive = false;
     };
-  }, [params.server, params.source, params.text, repository, router]);
+  }, [params.server, params.source, params.text, repository, router, service]);
 
   if (!error) {
     return (

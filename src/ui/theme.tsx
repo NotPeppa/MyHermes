@@ -16,51 +16,66 @@ export interface ThemeColors {
   primary: string;
   onPrimary: string;
   accent: string;
+  accentSoft: string;
   danger: string;
   onDanger: string;
+  dangerSoft: string;
   warning: string;
+  warningSoft: string;
   success: string;
+  successSoft: string;
+  userBubble: string;
   codeBg: string;
   codeText: string;
   scrim: string;
 }
 
 const light: ThemeColors = {
-  bg: '#F8FAFC',
+  bg: '#F4F6F9',
   surface: '#FFFFFF',
-  surfaceAlt: '#EEF2F7',
-  border: '#CBD5E1',
+  surfaceAlt: '#EDF1F6',
+  border: '#E2E8F0',
   text: '#0F172A',
-  textMuted: '#475569',
-  primary: '#1E293B',
+  textMuted: '#64748B',
+  primary: '#0F172A',
   onPrimary: '#FFFFFF',
   accent: '#15803D',
-  danger: '#B91C1C',
+  accentSoft: '#DCFCE7',
+  danger: '#DC2626',
   onDanger: '#FFFFFF',
+  dangerSoft: '#FEE2E2',
   warning: '#B45309',
+  warningSoft: '#FEF3C7',
   success: '#15803D',
-  codeBg: '#EEF2F7',
+  successSoft: '#DCFCE7',
+  userBubble: '#E2E8F0',
+  codeBg: '#F1F5F9',
   codeText: '#0F172A',
-  scrim: 'rgba(15,23,42,0.55)',
+  scrim: 'rgba(15,23,42,0.52)',
 };
 
 const dark: ThemeColors = {
-  bg: '#0F172A',
-  surface: '#1B2436',
-  surfaceAlt: '#273449',
-  border: '#475569',
+  bg: '#0B1120',
+  surface: '#151E31',
+  surfaceAlt: '#1E293B',
+  border: '#283548',
   text: '#F8FAFC',
-  textMuted: '#CBD5E1',
+  textMuted: '#94A3B8',
   primary: '#22C55E',
   onPrimary: '#052E16',
   accent: '#4ADE80',
+  accentSoft: 'rgba(34,197,94,0.16)',
   danger: '#F87171',
   onDanger: '#450A0A',
+  dangerSoft: 'rgba(248,113,113,0.16)',
   warning: '#FBBF24',
+  warningSoft: 'rgba(251,191,36,0.16)',
   success: '#4ADE80',
-  codeBg: '#0B1220',
+  successSoft: 'rgba(74,222,128,0.16)',
+  userBubble: '#1E293B',
+  codeBg: '#090E1A',
   codeText: '#E2E8F0',
-  scrim: 'rgba(2,6,23,0.7)',
+  scrim: 'rgba(2,6,23,0.72)',
 };
 
 export interface Theme {
@@ -78,7 +93,7 @@ export interface Theme {
 const shared = {
   space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 },
   radius: { sm: 8, md: 12, lg: 16, pill: 999 },
-  font: { caption: 14, body: 16, title: 20, heading: 26, code: 15 },
+  font: { caption: 13, body: 15.5, title: 19, heading: 25, code: 14 },
   fontFamily: {
     sans: Platform.select({ ios: 'System', android: 'sans-serif', default: undefined }),
     mono: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) as string,

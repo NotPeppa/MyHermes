@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCanGoBack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -12,27 +12,24 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { ImageAttachment, Message, ModelOption, PendingControl, Run, ToolEvent } from '@/domain/models';
+import type { ImageAttachment, Message, ModelOption, PendingControl, Run } from '@/domain/models';
 import { useAppServices } from '@/composition';
 import { formatBytes, MAX_IMAGES } from '@/media/image';
 import { buildConflict } from '@/features/chat/conflict';
 import { useChat } from '@/features/chat/useChat';
 import { takePendingIntent } from '@/features/intents/pending';
 import { describeError } from '@/features/common/errors';
+import { readShowToolCalls } from '@/features/settings/prefs';
 import { canStopRun, isActiveRun, runStateTone, statusText } from '@/features/common/status';
 import { ActionSheet, ControlSheet, DetailsSheet, Sheet } from '@/ui/dialogs';
 import { ConflictSheet } from '@/ui/conflict-sheet';
 import { copyText } from '@/ui/clipboard';
-import { formatTime } from '@/ui/format';
+import { formatTime, hasKnownTime } from '@/ui/format';
 import { DraftMessage, MessageItem } from '@/ui/message-item';
+import { buildChatItems, type ChatItem } from '@/features/chat/items';
 import { Banner, Button, Caption, Chip, EmptyState, ListRow, LoadingView, Screen, ScreenHeader } from '@/ui/primitives';
 import { ToolCard } from '@/ui/tool-card';
 import { useTheme } from '@/ui/theme';
-
-type ChatItem =
-  | { kind: 'message'; key: string; at: number; message: Message }
-  | { kind: 'tool'; key: string; at: number; event: ToolEvent }
-  | { kind: 'draft'; key: string; at: number; text: string };
 
 /** 模型的 provider / 上下文窗口提示；两者都没有时返回 undefined，避免重复显示 id。 */
 /** 按提供商分组，保留服务器返回的顺序（官方 payload 已按 canonical 顺序排好）。 */
@@ -63,6 +60,7 @@ function modelHint(option: ModelOption): string | undefined {
 export default function ChatScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const canGoBack = useCanGoBack();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ serverId: string; sessionId: string }>();
   const serverId = params.serverId ?? '';
@@ -70,6 +68,7 @@ export default function ChatScreen() {
   const { repository, service } = useAppServices();
   const chat = useChat(serverId, sessionId);
   const [input, setInput] = useState('');
+  const [sessionTitle, setSessionTitle] = useState('对话');
   const [forkedFrom, setForkedFrom] = useState<string | null>(null);
   const [features, setFeatures] = useState<Record<string, boolean>>({});
   const [models, setModels] = useState<ModelOption[] | null>(null);
@@ -88,8 +87,28 @@ export default function ChatScreen() {
   // P1 图片附件：只有 openai_compat 模式声明了图片输入，其它模式不显示入口
   const [imagesEnabled, setImagesEnabled] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const imagesCountRef = useRef(0);
+  useEffect(() => {
+    imagesCountRef.current = images.length;
+  }, [images.length]);
   const [picking, setPicking] = useState(false);
   const [attachNotice, setAttachNotice] = useState<{ tone: 'warn' | 'error'; text: string } | null>(null);
+  // 设置里的「显示工具调用」开关：默认开，改完回到会话页立即生效
+  const [showTools, setShowTools] = useState(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      void readShowToolCalls(repository).then((enabled) => {
+        if (alive) setShowTools(enabled);
+      }).catch(() => {
+        /* 读偏好失败保持默认开启，不打断对话 */
+      });
+      return () => {
+        alive = false;
+      };
+    }, [repository]),
+  );
 
   useEffect(() => {
     let alive = true;
@@ -102,6 +121,7 @@ export default function ChatScreen() {
         if (!alive) return;
         const server = servers.find((item) => item.id === serverId);
         const session = sessions.find((item) => item.id === sessionId);
+        if (session?.title?.trim()) setSessionTitle(session.title.trim());
         setFeatures(server?.capabilities.features ?? {});
         // 图片走多模态接口：兼容模式用 image_url，会话流式接口用内联 parts；
         // Runs 模式只要服务器声明了会话流式接口也能发图（该轮不支持跨重启恢复）
@@ -180,22 +200,11 @@ export default function ChatScreen() {
 
   const controlVisible = !!pendingControl && dismissedControl !== pendingControl.request_id;
 
-  const items = useMemo<ChatItem[]>(() => {
-    const merged: ChatItem[] = chat.view.messages.map((message) => ({
-      kind: 'message',
-      key: `m-${message.id}`,
-      at: message.createdAt,
-      message,
-    }));
-    for (const event of chat.view.tools) {
-      merged.push({ kind: 'tool', key: `t-${event.id}`, at: event.recordedAt, event });
-    }
-    merged.sort((a, b) => a.at - b.at);
-    if (chat.view.draft && chat.view.draft.length > 0) {
-      merged.push({ kind: 'draft', key: 'draft', at: Number.MAX_SAFE_INTEGER, text: chat.view.draft });
-    }
-    return merged.reverse();
-  }, [chat.view.draft, chat.view.messages, chat.view.tools]);
+  const items = useMemo<ChatItem[]>(
+    () =>
+      buildChatItems(chat.view.messages, chat.view.tools, chat.view.draft, { showTools }).reverse(),
+    [chat.view.draft, chat.view.messages, chat.view.tools, showTools],
+  );
 
   const active = isActiveRun(latestRun?.status);
   const stopping = chat.busy === 'stop';
@@ -226,14 +235,25 @@ export default function ChatScreen() {
     if (pending.text) setInput((current) => (current.length > 0 ? current : pending.text ?? ''));
     if (!pending.imageUri) return;
     try {
+      const servers = await repository.listServers();
+      const server = servers.find((item) => item.id === serverId);
+      const serverFeatures = server?.capabilities.features ?? {};
+      const allowed =
+        server?.capabilities.mode === 'openai_compat' ||
+        serverFeatures.session_chat_streaming === true ||
+        serverFeatures.session_chat_stream === true;
+      if (!allowed) {
+        setAttachNotice({ tone: 'warn', text: '当前实例不支持图片附件，已忽略分享的图片。' });
+        return;
+      }
       const { processImage } = await import('@/media/picker');
-      const result = await processImage({ uri: pending.imageUri }, 0);
+      const result = await processImage({ uri: pending.imageUri }, imagesCountRef.current);
       if (result.kind === 'picked') setImages((prev) => [...prev, result.attachment]);
       else if (result.kind !== 'cancelled') setAttachNotice({ tone: 'warn', text: result.message });
     } catch (error_) {
       setAttachNotice({ tone: 'error', text: describeError(error_) });
     }
-  }, []);
+  }, [repository, serverId]);
 
   // 挂载即消费一次（深链直接进聊天页），聚焦再消费一次（已在聊天页时收到分享）
   useEffect(() => {
@@ -298,15 +318,15 @@ export default function ChatScreen() {
   return (
     <Screen>
       <ScreenHeader
-        title="对话"
+        title={sessionTitle}
         subtitle={
           <View
             accessible
             accessibilityLabel={`运行状态：${statusText(latestRun?.status ?? (uncertain ? 'submission_uncertain' : 'idle'))}`}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs, marginTop: 2 }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}
           >
-            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: toneColor }} />
-            <Text numberOfLines={1} style={{ color: toneColor, fontSize: theme.font.caption }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: toneColor }} />
+            <Text numberOfLines={1} style={{ color: toneColor, fontSize: theme.font.caption - 1, fontWeight: '600' }}>
               {statusText(latestRun?.status ?? (uncertain ? 'submission_uncertain' : 'idle'))}
             </Text>
             {latestRun?.status === 'unknown' && latestRun.rawStatus ? (
@@ -314,7 +334,10 @@ export default function ChatScreen() {
             ) : null}
           </View>
         }
-        onBack={() => router.back()}
+        onBack={() => {
+          if (canGoBack) router.back();
+          else router.replace('/(main)/sessions');
+        }}
         actions={
           // 没有 model_options 能力就不放任何模型入口
           modelsEnabled ? (
@@ -475,11 +498,9 @@ export default function ChatScreen() {
 
         <View
           style={{
-            borderTopWidth: 1,
-            borderTopColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
+            backgroundColor: theme.colors.bg,
             paddingHorizontal: theme.space.md,
-            paddingTop: theme.space.sm,
+            paddingTop: theme.space.xs,
             paddingBottom: insets.bottom + theme.space.sm,
             gap: theme.space.sm,
           }}
@@ -490,6 +511,7 @@ export default function ChatScreen() {
               style={{
                 color: attachNotice.tone === 'warn' ? theme.colors.warning : theme.colors.danger,
                 fontSize: theme.font.caption,
+                paddingHorizontal: theme.space.xs,
               }}
             >
               {attachNotice.text}
@@ -499,26 +521,19 @@ export default function ChatScreen() {
           {imagesEnabled ? (
             <View style={{ gap: theme.space.xs }}>
               {images.length > 0 ? (
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.sm, paddingHorizontal: theme.space.xs }}>
                   {images.map((image, index) => (
-                    <View key={image.id} style={{ gap: 2 }}>
-                      <View
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          borderWidth: 1,
-                          borderColor: theme.colors.border,
-                          borderRadius: theme.radius.sm,
-                          backgroundColor: theme.colors.bg,
-                        }}
-                      >
+                    <View key={image.id} style={{ gap: 2, alignItems: 'center' }}>
+                      <View style={{ position: 'relative' }}>
                         <Image
                           source={{ uri: image.dataUri }}
                           accessibilityLabel={`已选图片 ${index + 1}`}
                           style={{
-                            width: 48,
-                            height: 48,
-                            borderRadius: theme.radius.sm,
+                            width: 60,
+                            height: 60,
+                            borderRadius: theme.radius.md,
+                            borderWidth: 1,
+                            borderColor: theme.colors.border,
                             backgroundColor: theme.colors.surfaceAlt,
                           }}
                         />
@@ -526,34 +541,51 @@ export default function ChatScreen() {
                           accessibilityRole="button"
                           accessibilityLabel={`移除图片 ${index + 1}`}
                           accessibilityHint="从待发送列表移除这张图片"
+                          hitSlop={8}
                           onPress={() => setImages((prev) => prev.filter((item) => item.id !== image.id))}
                           style={({ pressed }) => ({
-                            width: theme.minTouch,
-                            height: theme.minTouch,
+                            position: 'absolute',
+                            top: -6,
+                            right: -6,
+                            width: 24,
+                            height: 24,
+                            borderRadius: 12,
                             alignItems: 'center',
                             justifyContent: 'center',
-                            backgroundColor: pressed ? theme.colors.surfaceAlt : 'transparent',
+                            backgroundColor: theme.colors.primary,
+                            opacity: pressed ? 0.75 : 1,
                           })}
                         >
-                          <Ionicons name="close" size={theme.icon.sm} color={theme.colors.textMuted} />
+                          <Ionicons name="close" size={14} color={theme.colors.onPrimary} />
                         </Pressable>
                       </View>
-                      <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
-                        {image.width}×{image.height} · {formatBytes(image.bytes)}
+                      <Text style={{ color: theme.colors.textMuted, fontSize: 11 }}>
+                        {formatBytes(image.bytes)}
                       </Text>
                     </View>
                   ))}
                 </View>
               ) : null}
               {atLimit ? (
-                <Text style={{ color: theme.colors.warning, fontSize: theme.font.caption }}>
+                <Text style={{ color: theme.colors.warning, fontSize: theme.font.caption, paddingHorizontal: theme.space.xs }}>
                   已达上限 {MAX_IMAGES} 张，移除后可继续添加
                 </Text>
               ) : null}
             </View>
           ) : null}
 
-          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: theme.space.sm }}>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'flex-end',
+              gap: theme.space.xs,
+              padding: 6,
+              borderRadius: 24,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surface,
+            }}
+          >
             {imagesEnabled ? (
               <Pressable
                 accessibilityRole="button"
@@ -563,19 +595,19 @@ export default function ChatScreen() {
                 disabled={picking || atLimit}
                 onPress={() => void onPick()}
                 style={({ pressed }) => ({
-                  width: theme.minTouch,
-                  height: theme.minTouch,
-                  borderRadius: theme.radius.md,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
                   alignItems: 'center',
                   justifyContent: 'center',
                   backgroundColor: pressed ? theme.colors.surfaceAlt : 'transparent',
-                  opacity: picking || atLimit ? 0.45 : 1,
+                  opacity: picking || atLimit ? 0.4 : 1,
                 })}
               >
                 {picking ? (
                   <ActivityIndicator size="small" color={theme.colors.textMuted} />
                 ) : (
-                  <Ionicons name="image-outline" size={theme.icon.md} color={theme.colors.text} />
+                  <Ionicons name="image-outline" size={theme.icon.md} color={theme.colors.textMuted} />
                 )}
               </Pressable>
             ) : null}
@@ -584,20 +616,16 @@ export default function ChatScreen() {
               accessibilityHint="输入要发送给 Hermes 的消息"
               value={input}
               onChangeText={setInput}
-              placeholder={active ? 'Hermes 正在执行，可先输入下一条' : '输入消息…'}
+              placeholder={active ? 'Hermes 正在执行，可先输入下一条' : '给 Hermes 发消息…'}
               placeholderTextColor={theme.colors.textMuted}
               multiline
               editable={!sending}
               style={{
                 flex: 1,
-                minHeight: theme.minTouch,
+                minHeight: 40,
                 maxHeight: 132,
-                paddingHorizontal: theme.space.md,
+                paddingHorizontal: imagesEnabled ? theme.space.xs : theme.space.md,
                 paddingVertical: theme.space.sm,
-                borderRadius: theme.radius.md,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.bg,
                 color: theme.colors.text,
                 fontSize: theme.font.body,
                 textAlignVertical: 'center',
@@ -611,16 +639,16 @@ export default function ChatScreen() {
                 disabled={stopping}
                 onPress={() => void chat.stop(latestRun.runId)}
                 style={({ pressed }) => ({
-                  width: theme.minTouch,
-                  height: theme.minTouch,
-                  borderRadius: theme.radius.md,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: pressed ? theme.colors.surfaceAlt : theme.colors.danger,
-                  opacity: stopping ? 0.5 : 1,
+                  backgroundColor: theme.colors.danger,
+                  opacity: stopping ? 0.5 : pressed ? 0.82 : 1,
                 })}
               >
-                <Ionicons name="stop" size={theme.icon.md} color={theme.colors.onDanger} />
+                <Ionicons name="stop" size={18} color={theme.colors.onDanger} />
               </Pressable>
             ) : (
               <Pressable
@@ -630,16 +658,20 @@ export default function ChatScreen() {
                 disabled={!canSend}
                 onPress={() => void onSend()}
                 style={({ pressed }) => ({
-                  width: theme.minTouch,
-                  height: theme.minTouch,
-                  borderRadius: theme.radius.md,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
                   alignItems: 'center',
                   justifyContent: 'center',
-                  backgroundColor: pressed ? theme.colors.surfaceAlt : theme.colors.primary,
-                  opacity: canSend ? 1 : 0.45,
+                  backgroundColor: canSend ? theme.colors.primary : theme.colors.surfaceAlt,
+                  opacity: pressed && canSend ? 0.82 : 1,
                 })}
               >
-                <Ionicons name="send" size={theme.icon.md} color={theme.colors.onPrimary} />
+                <Ionicons
+                  name="arrow-up"
+                  size={20}
+                  color={canSend ? theme.colors.onPrimary : theme.colors.textMuted}
+                />
               </Pressable>
             )}
           </View>
@@ -822,7 +854,7 @@ export default function ChatScreen() {
                 { label: '角色', value: detailsTarget.role },
                 { label: '消息 ID', value: detailsTarget.id },
                 { label: '服务器消息 ID', value: detailsTarget.serverMessageId ?? '无' },
-                { label: '时间', value: formatTime(detailsTarget.createdAt) },
+                { label: '时间', value: hasKnownTime(detailsTarget.createdAt) ? formatTime(detailsTarget.createdAt) : '未知' },
                 { label: '字符数', value: String(detailsTarget.body.length) },
               ]
             : []

@@ -1,7 +1,7 @@
 import { Text, View } from 'react-native';
 import type { Conflict } from '@/features/chat/conflict';
 import { Sheet } from './dialogs';
-import { formatTime } from './format';
+import { formatTime, hasKnownTime } from './format';
 import { Banner, Button, Caption } from './primitives';
 import { useTheme } from './theme';
 
@@ -100,7 +100,7 @@ export function ConflictSheet({
         <View style={{ gap: theme.space.xs }}>
           <Caption>
             来源：服务端 · 共 {conflict.server.messageCount} 条消息
-            {serverAt ? ` · 最后一条 ${formatTime(serverAt)}` : ''}
+            {serverAt !== undefined && hasKnownTime(serverAt) ? ` · 最后一条 ${formatTime(serverAt)}` : ''}
           </Caption>
           {conflict.server.lastUserText ? (
             <View style={{ gap: 2 }}>

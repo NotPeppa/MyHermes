@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { FlatList, RefreshControl, ScrollView, View } from 'react-native';
+import { FlatList, RefreshControl, ScrollView, TextInput, View } from 'react-native';
 import type { Session } from '@/domain/models';
 import { useSessions } from '@/features/sessions/useSessions';
 import { ActionSheet, ConfirmDialog, Sheet } from '@/ui/dialogs';
@@ -30,21 +30,21 @@ export default function SessionsScreen() {
   const [deleteTarget, setDeleteTarget] = useState<{ session: Session; mode: 'local' | 'server' } | null>(null);
   const [creating, setCreating] = useState(false);
   const firstFocus = useRef(true);
-  const { refresh: refreshSessions } = sessions;
+  const { reload: reloadSessions } = sessions;
   // 只有服务器声明 session_fork 才给分支入口，避免假按钮
   const canFork = sessions.activeServer?.capabilities.features.session_fork === true;
   const searching = sessions.query.trim().length > 0;
   const list = sessions.matches ?? sessions.sessions;
 
-  // 从对话/设置返回时刷新列表（首次进入由 hook 自己加载）
+  // 从对话/设置/实例管理返回时重新读取实例与会话列表（首次进入由 hook 自己加载）
   useFocusEffect(
     useCallback(() => {
       if (firstFocus.current) {
         firstFocus.current = false;
         return;
       }
-      void refreshSessions();
-    }, [refreshSessions]),
+      void reloadSessions();
+    }, [reloadSessions]),
   );
 
   const openChat = (sessionId: string) => {
@@ -95,7 +95,7 @@ export default function SessionsScreen() {
         }
       />
 
-      <View style={{ paddingVertical: theme.space.sm }}>
+      <View style={{ paddingTop: theme.space.sm, paddingBottom: theme.space.xs }}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -105,6 +105,7 @@ export default function SessionsScreen() {
             <Chip
               key={server.id}
               label={server.name}
+              dot={server.id === sessions.activeServer?.id}
               selected={server.id === sessions.activeServer?.id}
               onPress={() => sessions.selectServer(server.id)}
               accessibilityLabel={`切换到实例 ${server.name}`}
@@ -112,6 +113,7 @@ export default function SessionsScreen() {
           ))}
           <Chip
             label="添加实例"
+            icon="add"
             selected={false}
             onPress={() => router.push('/(onboarding)/add-server')}
             accessibilityLabel="添加实例"
@@ -119,25 +121,49 @@ export default function SessionsScreen() {
         </ScrollView>
       </View>
 
-      <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.sm }}>
-        <TextField
-          label="搜索会话"
-          placeholder="搜索会话标题"
-          value={sessions.query}
-          onChangeText={sessions.setQuery}
-          autoCapitalize="none"
-          maxLength={80}
-          trailing={
-            searching ? (
-              <IconButton
-                name="close-circle"
-                accessibilityLabel="清空搜索"
-                accessibilityHint="清除关键词并恢复全部会话"
-                onPress={() => sessions.setQuery('')}
-              />
-            ) : undefined
-          }
-        />
+      <View style={{ paddingHorizontal: theme.space.lg, paddingTop: theme.space.xs, gap: theme.space.sm }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: theme.space.sm,
+            paddingLeft: theme.space.md,
+            paddingRight: searching ? theme.space.xs : theme.space.md,
+            minHeight: 44,
+            borderRadius: theme.radius.md,
+            backgroundColor: theme.colors.surface,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+          }}
+        >
+          <Ionicons name="search-outline" size={theme.icon.sm} color={theme.colors.textMuted} />
+          <TextInput
+            accessibilityLabel="搜索会话"
+            placeholder="搜索会话标题"
+            placeholderTextColor={theme.colors.textMuted}
+            value={sessions.query}
+            onChangeText={sessions.setQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={80}
+            style={{
+              flex: 1,
+              minHeight: 42,
+              color: theme.colors.text,
+              fontSize: theme.font.body,
+            }}
+          />
+          {searching ? (
+            <IconButton
+              name="close-circle"
+              size={theme.icon.sm}
+              color={theme.colors.textMuted}
+              accessibilityLabel="清空搜索"
+              accessibilityHint="清除关键词并恢复全部会话"
+              onPress={() => sessions.setQuery('')}
+            />
+          ) : null}
+        </View>
         {sessions.offline ? (
           <Banner tone="warn" title="连接中断" icon="cloud-offline-outline">
             正在显示本地缓存的会话，恢复网络后下拉刷新。
@@ -151,7 +177,7 @@ export default function SessionsScreen() {
         {sessions.notice ? (
           <Banner
             tone={sessions.notice.tone}
-            title={sessions.notice.tone === 'success' ? '分支会话已创建' : '分支会话失败'}
+            title={sessions.notice.title ?? (sessions.notice.tone === 'success' ? '分支会话已创建' : '分支会话失败')}
             action={<Button label="知道了" variant="ghost" onPress={sessions.dismissNotice} />}
           >
             {sessions.notice.text}
@@ -162,7 +188,7 @@ export default function SessionsScreen() {
       <FlatList
         data={list}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ padding: theme.space.lg, paddingTop: theme.space.sm, flexGrow: 1 }}
+        contentContainerStyle={{ padding: theme.space.lg, paddingTop: theme.space.md, gap: theme.space.sm, flexGrow: 1 }}
         refreshControl={
           <RefreshControl
             refreshing={sessions.refreshing}
@@ -170,9 +196,6 @@ export default function SessionsScreen() {
             tintColor={theme.colors.accent}
           />
         }
-        ItemSeparatorComponent={() => (
-          <View style={{ height: 1, backgroundColor: theme.colors.border, opacity: 0.6 }} />
-        )}
         ListEmptyComponent={
           searching ? (
             <EmptyState
@@ -211,17 +234,53 @@ export default function SessionsScreen() {
           )
         }
         renderItem={({ item }) => (
-          <ListRow
-            title={item.title || '未命名会话'}
-            meta={`${formatRelative(item.updatedAt)}${item.localOnly ? ' · 仅本地缓存' : ''}${
-              item.forkedFrom ? ' · 分支会话' : ''
-            }`}
-            onPress={() => openChat(item.id)}
-            onLongPress={() => setMenuTarget(item)}
-            accessibilityLabel={`会话 ${item.title || '未命名会话'}`}
-            accessibilityHint="点击进入对话，长按更多操作"
-            right={<Ionicons name="chevron-forward" size={theme.icon.sm} color={theme.colors.textMuted} />}
-          />
+          <View
+            style={{
+              backgroundColor: theme.colors.surface,
+              borderRadius: theme.radius.md,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              paddingHorizontal: theme.space.sm,
+            }}
+          >
+            <ListRow
+              leading={
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 10,
+                    backgroundColor: theme.colors.surfaceAlt,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons
+                    name={item.forkedFrom ? 'git-branch-outline' : 'chatbubble-outline'}
+                    size={17}
+                    color={theme.colors.textMuted}
+                  />
+                </View>
+              }
+              title={item.title || '未命名会话'}
+              meta={`${formatRelative(item.updatedAt)}${item.localOnly ? ' · 仅本地缓存' : ''}${
+                item.forkedFrom ? ' · 分支会话' : ''
+              }`}
+              onPress={() => openChat(item.id)}
+              onLongPress={() => setMenuTarget(item)}
+              accessibilityLabel={`会话 ${item.title || '未命名会话'}`}
+              accessibilityHint="点击进入对话，长按更多操作"
+              right={
+                <IconButton
+                  name="ellipsis-horizontal"
+                  size={theme.icon.sm}
+                  color={theme.colors.textMuted}
+                  accessibilityLabel={`更多操作 ${item.title || '未命名会话'}`}
+                  onPress={() => setMenuTarget(item)}
+                />
+              }
+            />
+          </View>
         )}
       />
 

@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, RefreshControl, Text, View } from 'react-native';
@@ -7,8 +6,11 @@ import { useJobs } from '@/features/jobs/useJobs';
 import { ConfirmDialog } from '@/ui/dialogs';
 import { formatRelative } from '@/ui/format';
 import {
+  Badge,
   Banner,
   Button,
+  Card,
+  Divider,
   EmptyState,
   IconButton,
   LoadingView,
@@ -91,45 +93,35 @@ export default function JobsScreen() {
             const label = labelOf(item);
             const busy = jobs.busyJobId === item.id;
             return (
-              <View
-                style={{
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  borderRadius: theme.radius.md,
-                  backgroundColor: theme.colors.surface,
-                  padding: theme.space.md,
-                  gap: theme.space.xs,
-                }}
-              >
-                <Text
-                  numberOfLines={2}
-                  style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}
-                >
-                  {label}
-                </Text>
-                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
-                  {`调度：${item.schedule ?? '未声明'}`}
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs }}>
-                  <Ionicons
-                    name={item.paused ? 'pause-circle-outline' : 'play-circle-outline'}
-                    size={theme.icon.sm}
-                    color={item.paused ? theme.colors.warning : theme.colors.success}
+              <Card style={{ gap: theme.space.sm }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.sm }}>
+                  <Text
+                    numberOfLines={2}
+                    style={{ flex: 1, color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600', lineHeight: theme.font.body * 1.45 }}
+                  >
+                    {label}
+                  </Text>
+                  <Badge
+                    dot
+                    tone={item.paused ? 'warn' : 'success'}
+                    label={item.paused ? '已暂停' : '启用中'}
                   />
-                  <Text style={{ color: item.paused ? theme.colors.warning : theme.colors.success, fontSize: theme.font.caption, fontWeight: '600' }}>
-                    {item.paused ? '已暂停' : '启用中'}
+                </View>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.sm }}>
+                  <Badge mono label={`调度：${item.schedule ?? '未声明'}`} tone="neutral" />
+                  <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
+                    {`上次运行：${item.lastStatus ?? '未知'}${
+                      item.lastRunAt ? ` · ${formatRelative(item.lastRunAt)}` : ''
+                    }`}
                   </Text>
                 </View>
-                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
-                  {`上次运行：${item.lastStatus ?? '未知'}${
-                    item.lastRunAt ? ` · ${formatRelative(item.lastRunAt)}` : ''
-                  }`}
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs }}>
+                <Divider />
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: theme.space.xs }}>
                   <IconButton
                     name="flash-outline"
                     accessibilityLabel={`立即运行任务 ${label}`}
                     accessibilityHint="让服务器马上执行一次此任务"
+                    color={theme.colors.accent}
                     disabled={busy}
                     onPress={() => void jobs.run(item.id)}
                   />
@@ -149,7 +141,7 @@ export default function JobsScreen() {
                     onPress={() => setDeleteTarget(item)}
                   />
                 </View>
-              </View>
+              </Card>
             );
           }}
         />

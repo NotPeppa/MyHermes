@@ -1,15 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCanGoBack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Text, View } from 'react-native';
 import { useAppServices } from '@/composition';
 import type { ServerConnection } from '@/domain/models';
 import { useAddServer, type DiagnosticStage } from '@/features/onboarding/useAddServer';
 import { modeLabel } from '@/features/common/status';
+import { appIcon } from '@/ui/logo';
 import {
+  Badge,
   Banner,
   Button,
   Caption,
+  Divider,
   IconButton,
   LoadingView,
   Screen,
@@ -37,6 +40,7 @@ export default function AddServerScreen() {
       .then((servers) => {
         if (alive) setExisting(servers.find((server) => server.id === params.serverId) ?? null);
       })
+      .catch(() => undefined)
       .finally(() => {
         if (alive) setLoadingExisting(false);
       });
@@ -90,6 +94,26 @@ function AddServerForm({
         onBack={onClose}
       />
       <ScrollScreen>
+        {!editing ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.md, paddingHorizontal: theme.space.xs }}>
+            {appIcon === null ? null : (
+              <Image
+                source={appIcon}
+                accessibilityLabel="MyHermes 应用图标"
+                style={{ width: 48, height: 48, borderRadius: theme.radius.md }}
+              />
+            )}
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: theme.colors.text, fontSize: theme.font.title - 1, fontWeight: '700' }}>
+                连接到你的 Hermes
+              </Text>
+              <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
+                填入实例地址与 API Key，四步诊断通过后自动保存。
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
         <Section title="连接信息">
           <TextField
             label="连接名称"
@@ -166,8 +190,11 @@ function AddServerForm({
 
         <Section title="连接诊断" description="按 URL 与 TLS、能力探测、鉴权、可用 API 四层逐项检查；失败不会保存任何成功状态。">
           <View style={{ gap: theme.space.sm }}>
-            {state.stages.map((stage) => (
-              <StageRow key={stage.id} stage={stage} />
+            {state.stages.map((stage, index) => (
+              <View key={stage.id} style={{ gap: theme.space.sm }}>
+                {index > 0 ? <Divider /> : null}
+                <StageRow stage={stage} />
+              </View>
             ))}
           </View>
           {state.stale ? (
@@ -234,12 +261,22 @@ function StageRow({ stage }: { stage: DiagnosticStage }) {
       ? theme.colors.success
       : stage.status === 'fail'
         ? theme.colors.danger
-        : theme.colors.textMuted;
+        : stage.status === 'running'
+          ? theme.colors.accent
+          : theme.colors.textMuted;
+  const badgeTone =
+    stage.status === 'ok'
+      ? 'success'
+      : stage.status === 'fail'
+        ? 'danger'
+        : stage.status === 'running'
+          ? 'accent'
+          : 'neutral';
   return (
     <View
       accessible
       accessibilityLabel={`${stage.label}，${STAGE_STATUS_LABEL[stage.status]}`}
-      style={{ flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.sm }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}
     >
       <View style={{ width: theme.icon.md, height: theme.icon.md, alignItems: 'center', justifyContent: 'center' }}>
         {stage.status === 'running' ? (
@@ -259,13 +296,14 @@ function StageRow({ stage }: { stage: DiagnosticStage }) {
         )}
       </View>
       <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ color: theme.colors.text, fontSize: theme.font.body }}>{stage.label}</Text>
+        <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '500' }}>{stage.label}</Text>
         {stage.detail ? (
-          <Text style={{ color: tint, fontSize: theme.font.caption, lineHeight: theme.font.caption * 1.5 }}>
+          <Text style={{ color: tint, fontSize: theme.font.caption, lineHeight: theme.font.caption * 1.45 }}>
             {stage.detail}
           </Text>
         ) : null}
       </View>
+      <Badge label={STAGE_STATUS_LABEL[stage.status]} tone={badgeTone} />
     </View>
   );
 }

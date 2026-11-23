@@ -5,7 +5,7 @@ import type { ToolEvent } from '@/domain/models';
 import { copyText } from './clipboard';
 import { parseDiff } from './diff';
 import { DiffView } from './diff-view';
-import { formatTime } from './format';
+import { formatTime, hasKnownTime } from './format';
 import { useTheme } from './theme';
 
 const EVENT_LABEL: Record<string, string> = {
@@ -24,7 +24,22 @@ export function ToolCard({ event }: { event: ToolEvent }) {
   // P2：识别统一 diff 就结构化渲染，识别失败保持纯文本（服务端契约不变）
   const diff = useMemo(() => (event.preview ? parseDiff(event.preview) : null), [event.preview]);
   const failed = event.eventType === 'failed';
-  const tint = failed ? theme.colors.danger : theme.colors.textMuted;
+  const completed = event.eventType === 'completed';
+  const started = event.eventType === 'started';
+  const tint = failed
+    ? theme.colors.danger
+    : completed
+      ? theme.colors.success
+      : started
+        ? theme.colors.accent
+        : theme.colors.textMuted;
+  const badgeBg = failed
+    ? theme.colors.dangerSoft
+    : completed
+      ? theme.colors.successSoft
+      : started
+        ? theme.colors.accentSoft
+        : theme.colors.surfaceAlt;
   return (
     <View
       style={{
@@ -49,21 +64,42 @@ export function ToolCard({ event }: { event: ToolEvent }) {
           paddingVertical: theme.space.sm,
           flexDirection: 'row',
           alignItems: 'center',
-          gap: theme.space.sm,
+          gap: theme.space.sm + 2,
           backgroundColor: pressed ? theme.colors.surfaceAlt : 'transparent',
         })}
       >
-        <Ionicons
-          name={failed ? 'alert-circle-outline' : 'construct-outline'}
-          size={theme.icon.sm}
-          color={tint}
-        />
-        <View style={{ flex: 1 }}>
-          <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            backgroundColor: badgeBg,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Ionicons
+            name={failed ? 'alert-circle-outline' : completed ? 'checkmark-circle-outline' : 'construct-outline'}
+            size={17}
+            color={tint}
+          />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text
+            numberOfLines={1}
+            style={{
+              color: theme.colors.text,
+              fontSize: theme.font.code,
+              fontFamily: theme.fontFamily.mono,
+              fontWeight: '600',
+            }}
+          >
             {event.toolName}
           </Text>
-          <Text numberOfLines={1} style={{ color: tint, fontSize: theme.font.caption }}>
-            {toolEventLabel(event.eventType)} · {formatTime(event.recordedAt)}
+          <Text numberOfLines={1} style={{ color: tint, fontSize: theme.font.caption - 1, fontWeight: '600' }}>
+            {hasKnownTime(event.recordedAt)
+              ? `${toolEventLabel(event.eventType)} · ${formatTime(event.recordedAt)}`
+              : toolEventLabel(event.eventType)}
           </Text>
         </View>
         <Ionicons

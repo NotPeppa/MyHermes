@@ -7,10 +7,25 @@ import { useAppServices } from '@/composition';
 import { describeError } from '@/features/common/errors';
 import { usePushBridge } from '@/features/notifications/usePushBridge';
 import { reportFor } from '@/features/settings/report';
-import { readCacheEnabled, readThemePreference, writeCacheEnabled, writeThemePreference } from '@/features/settings/prefs';
+import { readCacheEnabled, readShowToolCalls, readThemePreference, writeCacheEnabled, writeShowToolCalls, writeThemePreference } from '@/features/settings/prefs';
 import { copyText } from '@/ui/clipboard';
 import { ConfirmDialog } from '@/ui/dialogs';
-import { Banner, Button, Caption, ListRow, Screen, ScreenHeader, ScrollScreen, Section, SwitchRow, TextField } from '@/ui/primitives';
+import {
+  Badge,
+  Banner,
+  Button,
+  Caption,
+  Divider,
+  ListRow,
+  Screen,
+  ScreenHeader,
+  ScrollScreen,
+  Section,
+  SegmentedControl,
+  SwitchRow,
+  TextField,
+  type BadgeTone,
+} from '@/ui/primitives';
 import { appIcon } from '@/ui/logo';
 import { useTheme, useThemePreference, type ThemePreference } from '@/ui/theme';
 
@@ -39,13 +54,21 @@ function pushStatusLine(enabled: boolean, bridgeUrl: string, status: string, err
   return '连接中';
 }
 
+function pushStatusTone(enabled: boolean, bridgeUrl: string, status: string): BadgeTone {
+  if (!enabled || !bridgeUrl.trim()) return 'neutral';
+  if (status === 'connected') return 'success';
+  if (status === 'error') return 'danger';
+  return 'warn';
+}
+
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { repository } = useAppServices();
+  const { repository, service } = useAppServices();
   const { preference: themePreference, setPreference: applyThemePreference } = useThemePreference();
   const push = usePushBridge();
   const [cacheEnabled, setCacheEnabled] = useState(true);
+  const [showToolCalls, setShowToolCalls] = useState(true);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -96,19 +119,47 @@ export default function SettingsScreen() {
     };
   }, [repository]);
 
+  useEffect(() => {
+    let alive = true;
+    void readShowToolCalls(repository)
+      .then((enabled) => {
+        if (alive) setShowToolCalls(enabled);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [repository]);
+
+  const toggleShowToolCalls = useCallback(
+    async (next: boolean) => {
+      setShowToolCalls(next);
+      setError(null);
+      try {
+        await writeShowToolCalls(repository, next);
+      } catch (toggleError) {
+        // 写失败就退回原值，避免开关显示与实际行为不一致
+        setShowToolCalls(!next);
+        setError(describeError(toggleError));
+      }
+    },
+    [repository],
+  );
+
   const clearCache = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
       const servers = await repository.listServers();
       for (const server of servers) await repository.clearCache(server.id);
+      service.clearMemoryCache();
       setNotice('本地缓存已清除。');
     } catch (clearError) {
       setError(describeError(clearError));
     } finally {
       setBusy(false);
     }
-  }, [repository]);
+  }, [repository, service]);
 
   const toggleCache = useCallback(
     async (next: boolean) => {
@@ -119,15 +170,17 @@ export default function SettingsScreen() {
         if (!next) {
           const servers = await repository.listServers();
           for (const server of servers) await repository.clearCache(server.id);
+          service.clearMemoryCache();
           setNotice('缓存已关闭，并清除了已有本地缓存。');
         } else {
           setNotice('缓存已开启：会话与消息会缓存在本机。');
         }
       } catch (toggleError) {
+        setCacheEnabled(!next);
         setError(describeError(toggleError));
       }
     },
-    [repository],
+    [repository, service],
   );
 
   const copyReport = useCallback(async () => {
@@ -157,21 +210,22 @@ export default function SettingsScreen() {
         ) : null}
 
         <Section title="外观">
-          <View style={{ flexDirection: 'row', gap: theme.space.sm }}>
-            {THEME_OPTIONS.map((option) => (
-              <View key={option.value} style={{ flex: 1 }}>
-                <Button
-                  label={option.label}
-                  variant={themePreference === option.value ? 'primary' : 'secondary'}
-                  onPress={() => void chooseTheme(option.value)}
-                  accessibilityLabel={`外观：${option.label}${themePreference === option.value ? '，已选中' : ''}`}
-                  accessibilityHint={option.hint}
-                  style={{ minWidth: 0 }}
-                />
-              </View>
-            ))}
-          </View>
+          <SegmentedControl
+            options={THEME_OPTIONS}
+            value={themePreference}
+            onChange={(next) => void chooseTheme(next)}
+            accessibilityPrefix="外观"
+          />
           <Caption>跟随系统时会随手机的深色模式自动切换；强制选项只影响本应用。</Caption>
+        </Section>
+
+        <Section title="会话">
+          <SwitchRow
+            label="显示工具调用"
+            description="在会话里显示每步工具调用与工具输出（工具名、状态、返回内容）。关闭后只保留你和模型的对话正文，工具事件仍会记录，重新打开即可查看。"
+            value={showToolCalls}
+            onValueChange={(next) => void toggleShowToolCalls(next)}
+          />
         </Section>
 
         <Section title="通知">
@@ -181,6 +235,7 @@ export default function SettingsScreen() {
             value={push.enabled}
             onValueChange={push.setEnabled}
           />
+          <Divider />
           <TextField
             label="推送桥地址"
             value={bridgeDraft}
@@ -193,13 +248,18 @@ export default function SettingsScreen() {
             helper="填自托管桥的 HTTPS 地址；WebSocket 密钥走 query，必须走 TLS。"
             accessibilityHint="例如 https://bridge.example.com"
           />
-          <Text
+          <View
+            accessible
             accessibilityLabel={`推送状态：${pushStatusLine(push.enabled, push.bridgeUrl, push.status, push.error)}`}
             accessibilityLiveRegion="polite"
-            style={{ color: theme.colors.textMuted, fontSize: theme.font.body }}
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.sm }}
           >
-            {`状态：${pushStatusLine(push.enabled, push.bridgeUrl, push.status, push.error)}`}
-          </Text>
+            <Badge
+              dot
+              tone={pushStatusTone(push.enabled, push.bridgeUrl, push.status)}
+              label={`状态：${pushStatusLine(push.enabled, push.bridgeUrl, push.status, push.error)}`}
+            />
+          </View>
           <Button
             label="测试连接"
             variant="secondary"
@@ -222,6 +282,11 @@ export default function SettingsScreen() {
 
         <Section title="实例">
           <ListRow
+            leading={
+              <View style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="server-outline" size={17} color={theme.colors.text} />
+              </View>
+            }
             title="实例管理"
             subtitle="编辑、删除实例；查看连接诊断"
             onPress={() => router.push('/(main)/settings/servers')}
@@ -232,13 +297,24 @@ export default function SettingsScreen() {
 
         <Section title="任务与技能">
           <ListRow
+            leading={
+              <View style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="time-outline" size={17} color={theme.colors.text} />
+              </View>
+            }
             title="任务中心"
             subtitle="定时与后台任务：立即运行、暂停/恢复、删除"
             onPress={() => router.push('/(main)/jobs')}
             accessibilityLabel="任务中心"
             right={<Ionicons name="chevron-forward" size={theme.icon.sm} color={theme.colors.textMuted} />}
           />
+          <Divider />
           <ListRow
+            leading={
+              <View style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="construct-outline" size={17} color={theme.colors.text} />
+              </View>
+            }
             title="技能与工具集"
             subtitle="只读查看服务器声明的 Skills 与 Toolsets"
             onPress={() => router.push('/(main)/settings/skills')}
@@ -263,17 +339,19 @@ export default function SettingsScreen() {
           />
           <View
             style={{
-              borderWidth: 1,
-              borderColor: theme.colors.border,
               borderRadius: theme.radius.md,
+              backgroundColor: theme.colors.surfaceAlt,
               padding: theme.space.md,
               gap: theme.space.xs,
             }}
           >
-            <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>
-              未启用 SQLCipher
-            </Text>
-            <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, lineHeight: theme.font.body * 1.5 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs + 2 }}>
+              <Ionicons name="shield-checkmark-outline" size={17} color={theme.colors.textMuted} />
+              <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>
+                未启用 SQLCipher
+              </Text>
+            </View>
+            <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption, lineHeight: theme.font.caption * 1.55 }}>
               当前构建使用 Expo SQLite 默认配置：本地数据库未启用 SQLCipher
               加密，缓存中的会话正文以明文存放在应用沙盒内。API Key 只写入系统安全存储（SecureStore），
               不进入数据库、日志与诊断报告。
@@ -296,20 +374,19 @@ export default function SettingsScreen() {
               <Image
                 source={appIcon}
                 accessibilityLabel="MyHermes 应用图标"
-                style={{ width: 56, height: 56, borderRadius: theme.radius.md }}
+                style={{ width: 52, height: 52, borderRadius: theme.radius.md }}
               />
             )}
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>MyHermes</Text>
+              <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' }}>MyHermes</Text>
               <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
-                {`版本 ${CLIENT_VERSION} · Hermes Agent 移动客户端`}
+                {`版本 ${CLIENT_VERSION} · Hermes Agent 移动客户端 · MIT`}
               </Text>
             </View>
           </View>
-          <ListRow title="版本" subtitle={CLIENT_VERSION} />
-          <ListRow title="许可证" subtitle="MIT（详见仓库 LICENSE）" />
+          <Divider />
           <View style={{ gap: theme.space.xs }}>
-            <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>
+            <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption, fontWeight: '700' }}>
               开源组件
             </Text>
             {LICENSES.map((item) => (
@@ -317,8 +394,8 @@ export default function SettingsScreen() {
                 key={item.name}
                 style={{ flexDirection: 'row', justifyContent: 'space-between', gap: theme.space.md }}
               >
-                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body }}>{item.name}</Text>
-                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body }}>{item.license}</Text>
+                <Text style={{ color: theme.colors.text, fontSize: theme.font.caption }}>{item.name}</Text>
+                <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>{item.license}</Text>
               </View>
             ))}
           </View>

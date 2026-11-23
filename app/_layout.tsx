@@ -16,7 +16,6 @@ export default function RootLayout() {
         <ThemeProvider>
           <AppServicesProvider>
             <BootGate />
-            <ShareIntentBridge />
           </AppServicesProvider>
         </ThemeProvider>
       </SafeAreaProvider>
@@ -55,13 +54,16 @@ function BootGate() {
     <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar style={theme.scheme === 'dark' ? 'light' : 'dark'} />
       {ready ? (
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: theme.colors.bg },
-            animation: 'slide_from_right',
-          }}
-        />
+        <>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: theme.colors.bg },
+              animation: 'slide_from_right',
+            }}
+          />
+          <ShareIntentBridge />
+        </>
       ) : error ? (
         <Screen>
           <View style={{ flex: 1, justifyContent: 'center', padding: theme.space.lg, gap: theme.space.lg }}>

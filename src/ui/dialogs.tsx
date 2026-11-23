@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState, type ReactNode } from 'react';
-import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { PendingControl } from '@/domain/models';
 import { Button, IconButton, TextField, type IconName } from './primitives';
@@ -23,7 +23,10 @@ export function Sheet({
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
-      <View style={{ flex: 1, backgroundColor: theme.colors.scrim, justifyContent: 'flex-end' }}>
+      <KeyboardAvoidingView
+        behavior="padding"
+        style={{ flex: 1, backgroundColor: theme.colors.scrim, justifyContent: 'flex-end' }}
+      >
         <Pressable accessibilityRole="button" accessibilityLabel="关闭弹层" onPress={onClose} style={{ flex: 1 }} />
         <View
           accessibilityViewIsModal
@@ -53,12 +56,15 @@ export function Sheet({
             </Text>
             <IconButton name="close" accessibilityLabel="关闭" onPress={onClose} />
           </View>
-          <ScrollView contentContainerStyle={{ padding: theme.space.lg, paddingTop: theme.space.sm, gap: theme.space.md }}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ padding: theme.space.lg, paddingTop: theme.space.sm, gap: theme.space.md }}
+          >
             {children}
           </ScrollView>
           {footer ? <View style={{ paddingHorizontal: theme.space.lg, gap: theme.space.sm }}>{footer}</View> : null}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -179,6 +185,10 @@ export function ControlSheet({
 }) {
   const theme = useTheme();
   const [answer, setAnswer] = useState('');
+  const requestId = control?.request_id ?? null;
+  useEffect(() => {
+    setAnswer('');
+  }, [requestId]);
   if (!control) return null;
   const clarification = /clarif/i.test(control.type);
   const options =
@@ -216,7 +226,11 @@ export function ControlSheet({
             label="提交答案"
             busy={busy}
             disabled={answer.trim().length === 0}
-            onPress={() => onRespond(answer.trim())}
+            onPress={() => {
+              const trimmed = answer.trim();
+              setAnswer('');
+              onRespond(trimmed);
+            }}
           />
         ) : (
           options.map((option) => (

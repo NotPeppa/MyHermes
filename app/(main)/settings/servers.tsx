@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { FlatList, Text, View } from 'react-native';
+import { FlatList, View } from 'react-native';
 import type { ServerConnection } from '@/domain/models';
 import { enabledFeatures, modeLabel } from '@/features/common/status';
 import { hostOf } from '@/features/settings/diagnostics';
@@ -11,9 +11,12 @@ import { copyText } from '@/ui/clipboard';
 import { ConfirmDialog } from '@/ui/dialogs';
 import { formatDateTime } from '@/ui/format';
 import {
+  Badge,
   Banner,
   Button,
   Caption,
+  Card,
+  Divider,
   IconButton,
   ListRow,
   LoadingView,
@@ -86,9 +89,8 @@ export default function ServersScreen() {
               ) : null}
             </View>
           }
-          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: theme.colors.border }} />}
           renderItem={({ item }) => (
-            <View style={{ gap: theme.space.xs }}>
+            <Card style={{ gap: theme.space.sm }}>
               <ListRow
                 title={item.name}
                 subtitle={`${hostOf(item.baseUrl)} · ${modeLabel(item.capabilities?.mode)}`}
@@ -118,35 +120,23 @@ export default function ServersScreen() {
                   </View>
                 }
               />
+              <Divider />
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.xs }}>
                 {enabledFeatures(item.capabilities?.features).length > 0 ? (
                   enabledFeatures(item.capabilities?.features).map((feature) => (
-                    <Text
-                      key={feature}
-                      style={{
-                        color: theme.colors.textMuted,
-                        fontSize: theme.font.caption,
-                        borderWidth: 1,
-                        borderColor: theme.colors.border,
-                        borderRadius: theme.radius.sm,
-                        paddingHorizontal: theme.space.sm,
-                        paddingVertical: 2,
-                      }}
-                    >
-                      {feature}
-                    </Text>
+                    <Badge key={feature} label={feature} tone="neutral" />
                   ))
                 ) : (
                   <Caption>未探测到可用能力</Caption>
                 )}
               </View>
-            </View>
+            </Card>
           )}
           ListFooterComponent={
-            <View style={{ marginTop: theme.space.xl, gap: theme.space.md }}>
+            <View style={{ marginTop: theme.space.lg, gap: theme.space.md }}>
               <Section
                 title="连接诊断"
-                description="诊断只展示脱敏域名、状态、模式、能力与最近检测时间；复制报告前会自动移除 Key、请求体、会话正文与设备标识。"
+                description="诊断报告只包含脱敏域名、模式、能力与最近检测时间，自动移除 Key、请求体、会话正文与设备标识。"
               >
                 <Button
                   label={copied ? '已复制脱敏报告' : '复制脱敏诊断报告'}
@@ -154,23 +144,6 @@ export default function ServersScreen() {
                   icon={copied ? 'checkmark' : 'copy-outline'}
                   onPress={onCopyReport}
                 />
-                {state.servers.length > 0 ? (
-                  <View style={{ gap: theme.space.sm }}>
-                    {state.servers.map((server) => (
-                      <View key={server.id} style={{ gap: 2 }}>
-                        <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '600' }}>
-                          {server.name}
-                        </Text>
-                        <Caption>
-                          {hostOf(server.baseUrl)} · {modeLabel(server.capabilities?.mode)} ·{' '}
-                          {server.capabilities?.checkedAt
-                            ? formatDateTime(server.capabilities.checkedAt)
-                            : '从未检测'}
-                        </Caption>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
               </Section>
             </View>
           }

@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { Message } from '@/domain/models';
@@ -45,7 +46,7 @@ function CollapsibleOutput({
   } as const;
 
   return (
-    <View style={{ paddingVertical: theme.space.sm, paddingHorizontal: theme.space.md }}>
+    <View style={{ paddingVertical: theme.space.xs, paddingHorizontal: theme.space.md }}>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
@@ -59,15 +60,32 @@ function CollapsibleOutput({
           borderColor: theme.colors.border,
           borderRadius: theme.radius.md,
           backgroundColor: pressed ? theme.colors.surfaceAlt : theme.colors.surface,
-          padding: theme.space.md,
+          paddingHorizontal: theme.space.md,
+          paddingVertical: theme.space.sm + 2,
           gap: theme.space.xs,
         })}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}>
-          <Text style={{ flex: 1, color: theme.colors.textMuted, fontSize: theme.font.caption }}>{header}</Text>
-          <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption }}>
-            {expanded ? '收起' : `展开 · ${lines.length} 行`}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.xs + 2 }}>
+          <Ionicons
+            name={tone === 'tool' ? 'terminal-outline' : 'information-circle-outline'}
+            size={15}
+            color={theme.colors.textMuted}
+          />
+          <Text style={{ flex: 1, color: theme.colors.textMuted, fontSize: theme.font.caption, fontWeight: '600' }}>
+            {header}
           </Text>
+          <View
+            style={{
+              paddingHorizontal: theme.space.sm,
+              paddingVertical: 2,
+              borderRadius: theme.radius.pill,
+              backgroundColor: theme.colors.surfaceAlt,
+            }}
+          >
+            <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption - 1, fontWeight: '600' }}>
+              {expanded ? '收起' : `展开 · ${lines.length} 行`}
+            </Text>
+          </View>
         </View>
         <Text numberOfLines={expanded ? undefined : 1} style={bodyStyle}>
           {shown}
@@ -116,8 +134,7 @@ export function MessageItem({
       style={{
         color: theme.colors.text,
         fontSize: theme.font.body,
-        lineHeight: theme.font.body * 1.6,
-        textAlign: 'right',
+        lineHeight: theme.font.body * 1.55,
       }}
     >
       {message.body}
@@ -129,11 +146,21 @@ export function MessageItem({
   return (
     <View
       style={{
-        paddingVertical: theme.space.sm,
+        paddingVertical: theme.space.xs + 2,
         paddingHorizontal: theme.space.md,
         alignItems: isUser ? 'flex-end' : 'flex-start',
+        gap: 4,
       }}
     >
+      <Text
+        style={{
+          color: theme.colors.textMuted,
+          fontSize: theme.font.caption - 1,
+          paddingHorizontal: isUser ? theme.space.xs : 0,
+        }}
+      >
+        {header}
+      </Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${ROLE_LABEL[message.role]}的消息`}
@@ -141,26 +168,21 @@ export function MessageItem({
         onLongPress={onLongPress ? () => onLongPress(message) : undefined}
         delayLongPress={400}
         style={({ pressed }) => ({
-          minHeight: theme.minTouch,
+          minHeight: isUser ? 40 : theme.minTouch,
           justifyContent: 'center',
-          gap: theme.space.xs,
-          maxWidth: isUser ? '88%' : '100%',
-          paddingVertical: theme.space.sm,
-          paddingHorizontal: 0,
-          borderRadius: theme.radius.md,
-          // 用户消息不加气泡底色，只靠右对齐区分；按下时给一点反馈
-          backgroundColor: pressed ? theme.colors.surfaceAlt : 'transparent',
+          maxWidth: isUser ? '84%' : '100%',
+          paddingVertical: isUser ? theme.space.sm + 2 : theme.space.xs,
+          paddingHorizontal: isUser ? theme.space.md + 2 : 0,
+          borderRadius: isUser ? 18 : theme.radius.md,
+          ...(isUser ? { borderBottomRightRadius: 4 } : {}),
+          backgroundColor: isUser
+            ? theme.colors.userBubble
+            : pressed
+              ? theme.colors.surfaceAlt
+              : 'transparent',
+          opacity: isUser && pressed ? 0.86 : 1,
         })}
       >
-        <Text
-          style={{
-            color: theme.colors.textMuted,
-            fontSize: theme.font.caption,
-            textAlign: isUser ? 'right' : 'left',
-          }}
-        >
-          {header}
-        </Text>
         {body}
       </Pressable>
     </View>

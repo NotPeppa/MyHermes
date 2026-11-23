@@ -5,8 +5,11 @@ import { FlatList, Text, View } from 'react-native';
 import type { Skill, Toolset } from '@/domain/models';
 import { useSkills } from '@/features/skills/useSkills';
 import {
+  Badge,
   Banner,
   Button,
+  Card,
+  Divider,
   EmptyState,
   ListRow,
   LoadingView,
@@ -152,18 +155,20 @@ export default function SkillsScreen() {
           }
           if (item.kind === 'skill') {
             return (
-              <ListRow
-                title={item.skill.name}
-                subtitle={item.skill.description}
-                meta={item.skill.category ? `分类：${item.skill.category}` : undefined}
-                accessibilityLabel={`技能 ${item.skill.name}`}
-              />
+              <Card style={{ paddingVertical: theme.space.xs, paddingHorizontal: theme.space.md }}>
+                <ListRow
+                  title={item.skill.name}
+                  subtitle={item.skill.description}
+                  meta={item.skill.category ? `分类：${item.skill.category}` : undefined}
+                  accessibilityLabel={`技能 ${item.skill.name}`}
+                />
+              </Card>
             );
           }
           const tools = item.toolset.tools ?? [];
           const open = expanded[item.toolset.name] === true;
           return (
-            <View style={{ gap: theme.space.xs }}>
+            <Card style={{ paddingVertical: theme.space.xs, paddingHorizontal: theme.space.md, gap: theme.space.xs }}>
               <ListRow
                 title={item.toolset.label || item.toolset.name}
                 subtitle={item.toolset.description}
@@ -188,22 +193,16 @@ export default function SkillsScreen() {
                 }
               />
               {open ? (
-                <View style={{ paddingLeft: theme.space.md, gap: theme.space.xs }}>
-                  {tools.map((tool) => (
-                    <Text
-                      key={tool}
-                      style={{
-                        color: theme.colors.textMuted,
-                        fontSize: theme.font.caption,
-                        fontFamily: theme.fontFamily.mono,
-                      }}
-                    >
-                      {tool}
-                    </Text>
-                  ))}
-                </View>
+                <>
+                  <Divider />
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.xs, paddingVertical: theme.space.sm }}>
+                    {tools.map((tool) => (
+                      <Badge key={tool} label={tool} mono tone="neutral" />
+                    ))}
+                  </View>
+                </>
               ) : null}
-            </View>
+            </Card>
           );
         }}
       />

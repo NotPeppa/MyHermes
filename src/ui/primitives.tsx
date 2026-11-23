@@ -96,22 +96,182 @@ export function ScrollScreen({ children, footer }: { children: ReactNode; footer
   );
 }
 
-export function Section({ title, children, description }: { title: string; children: ReactNode; description?: string }) {
+export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  const theme = useTheme();
+  return (
+    <View
+      style={[
+        {
+          backgroundColor: theme.colors.surface,
+          borderRadius: theme.radius.lg,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          padding: theme.space.lg,
+          gap: theme.space.md,
+        },
+        style,
+      ]}
+    >
+      {children}
+    </View>
+  );
+}
+
+export function Divider() {
+  const theme = useTheme();
+  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border }} />;
+}
+
+export type BadgeTone = 'neutral' | 'accent' | 'success' | 'warn' | 'danger';
+
+export function Badge({
+  label,
+  tone = 'neutral',
+  dot = false,
+  mono = false,
+}: {
+  label: string;
+  tone?: BadgeTone;
+  dot?: boolean;
+  mono?: boolean;
+}) {
+  const theme = useTheme();
+  const palette: Record<BadgeTone, { bg: string; fg: string }> = {
+    neutral: { bg: theme.colors.surfaceAlt, fg: theme.colors.textMuted },
+    accent: { bg: theme.colors.accentSoft, fg: theme.colors.accent },
+    success: { bg: theme.colors.successSoft, fg: theme.colors.success },
+    warn: { bg: theme.colors.warningSoft, fg: theme.colors.warning },
+    danger: { bg: theme.colors.dangerSoft, fg: theme.colors.danger },
+  };
+  const colors = palette[tone];
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: theme.space.sm + 2,
+        paddingVertical: 4,
+        borderRadius: theme.radius.pill,
+        backgroundColor: colors.bg,
+        alignSelf: 'flex-start',
+      }}
+    >
+      {dot ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.fg }} /> : null}
+      <Text
+        numberOfLines={1}
+        style={{
+          color: colors.fg,
+          fontSize: theme.font.caption,
+          fontWeight: '600',
+          ...(mono ? { fontFamily: theme.fontFamily.mono } : {}),
+        }}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+export function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  accessibilityPrefix,
+}: {
+  options: { value: T; label: string; hint?: string }[];
+  value: T;
+  onChange: (next: T) => void;
+  accessibilityPrefix?: string;
+}) {
+  const theme = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        padding: 3,
+        borderRadius: theme.radius.md,
+        backgroundColor: theme.colors.surfaceAlt,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        gap: 3,
+      }}
+    >
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={
+              accessibilityPrefix
+                ? `${accessibilityPrefix}：${option.label}${selected ? '，已选中' : ''}`
+                : `${option.label}${selected ? '，已选中' : ''}`
+            }
+            accessibilityHint={option.hint}
+            onPress={() => onChange(option.value)}
+            style={({ pressed }) => ({
+              flex: 1,
+              minHeight: 38,
+              borderRadius: theme.radius.sm + 1,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: theme.space.sm,
+              backgroundColor: selected ? theme.colors.primary : 'transparent',
+              opacity: pressed ? 0.8 : 1,
+            })}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                color: selected ? theme.colors.onPrimary : theme.colors.textMuted,
+                fontSize: theme.font.caption + 1,
+                fontWeight: selected ? '700' : '600',
+              }}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+export function Section({
+  title,
+  children,
+  description,
+  card = true,
+}: {
+  title: string;
+  children: ReactNode;
+  description?: string;
+  card?: boolean;
+}) {
   const theme = useTheme();
   return (
     <View style={{ gap: theme.space.sm }}>
-      <Text
-        accessibilityRole="header"
-        style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' }}
-      >
-        {title}
-      </Text>
-      {description ? (
-        <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, lineHeight: theme.font.body * 1.5 }}>
-          {description}
+      <View style={{ paddingHorizontal: theme.space.xs, gap: 2 }}>
+        <Text
+          accessibilityRole="header"
+          style={{
+            color: theme.colors.textMuted,
+            fontSize: theme.font.caption,
+            fontWeight: '700',
+            letterSpacing: 0.4,
+          }}
+        >
+          {title}
         </Text>
-      ) : null}
-      <View style={{ gap: theme.space.md }}>{children}</View>
+        {description ? (
+          <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.caption, lineHeight: theme.font.caption * 1.5 }}>
+            {description}
+          </Text>
+        ) : null}
+      </View>
+      {card ? <Card>{children}</Card> : <View style={{ gap: theme.space.md }}>{children}</View>}
     </View>
   );
 }
@@ -161,18 +321,19 @@ export function Button({
       onPress={onPress}
       style={({ pressed }) => [
         {
-          minHeight: theme.minTouch,
+          minHeight: theme.minTouch - 2,
           minWidth: theme.minTouch,
           paddingHorizontal: theme.space.lg,
           borderRadius: theme.radius.md,
-          borderWidth: 1,
+          borderWidth: variant === 'secondary' ? 1 : 0,
           borderColor: tone.border,
-          backgroundColor: pressed ? colors.surfaceAlt : tone.bg,
+          backgroundColor:
+            pressed && (variant === 'secondary' || variant === 'ghost') ? colors.surfaceAlt : tone.bg,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'center',
           gap: theme.space.sm,
-          opacity: disabled ? 0.45 : 1,
+          opacity: disabled ? 0.45 : pressed && (variant === 'primary' || variant === 'danger') ? 0.84 : 1,
         },
         style,
       ]}
@@ -234,11 +395,15 @@ export function Chip({
   selected,
   onPress,
   accessibilityLabel,
+  icon,
+  dot = false,
 }: {
   label: string;
   selected: boolean;
   onPress: () => void;
   accessibilityLabel?: string;
+  icon?: IconName;
+  dot?: boolean;
 }) {
   const theme = useTheme();
   return (
@@ -247,21 +412,43 @@ export function Chip({
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected }}
       onPress={onPress}
+      hitSlop={6}
       style={({ pressed }) => ({
-        minHeight: theme.minTouch,
-        paddingHorizontal: theme.space.lg,
+        minHeight: 36,
+        paddingHorizontal: theme.space.md + 2,
         borderRadius: theme.radius.pill,
         borderWidth: 1,
         borderColor: selected ? theme.colors.primary : theme.colors.border,
         backgroundColor: selected ? theme.colors.primary : pressed ? theme.colors.surfaceAlt : theme.colors.surface,
+        flexDirection: 'row',
+        alignItems: 'center',
         justifyContent: 'center',
+        gap: 6,
+        opacity: pressed && selected ? 0.85 : 1,
       })}
     >
+      {dot ? (
+        <View
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: selected ? theme.colors.onPrimary : theme.colors.accent,
+          }}
+        />
+      ) : null}
+      {icon ? (
+        <Ionicons
+          name={icon}
+          size={15}
+          color={selected ? theme.colors.onPrimary : theme.colors.textMuted}
+        />
+      ) : null}
       <Text
         numberOfLines={1}
         style={{
           color: selected ? theme.colors.onPrimary : theme.colors.text,
-          fontSize: theme.font.body,
+          fontSize: theme.font.caption + 1,
           fontWeight: selected ? '700' : '500',
         }}
       >
@@ -447,11 +634,11 @@ export function Banner({
   icon?: IconName;
 }) {
   const theme = useTheme();
-  const tint: Record<BannerTone, string> = {
-    info: theme.colors.accent,
-    warn: theme.colors.warning,
-    error: theme.colors.danger,
-    success: theme.colors.success,
+  const tint: Record<BannerTone, { fg: string; bg: string }> = {
+    info: { fg: theme.colors.accent, bg: theme.colors.accentSoft },
+    warn: { fg: theme.colors.warning, bg: theme.colors.warningSoft },
+    error: { fg: theme.colors.danger, bg: theme.colors.dangerSoft },
+    success: { fg: theme.colors.success, bg: theme.colors.successSoft },
   };
   const glyph: Record<BannerTone, IconName> = {
     info: 'information-circle-outline',
@@ -463,30 +650,26 @@ export function Banner({
     <View
       accessibilityRole="alert"
       style={{
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        borderLeftWidth: 3,
-        borderLeftColor: tint[tone],
         borderRadius: theme.radius.md,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: tint[tone].bg,
         padding: theme.space.md,
         gap: theme.space.xs,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.sm }}>
-        <Ionicons name={icon ?? glyph[tone]} size={theme.icon.md} color={tint[tone]} />
+        <Ionicons name={icon ?? glyph[tone]} size={theme.icon.sm + 2} color={tint[tone].fg} />
         {title ? (
           <Text style={{ flex: 1, color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700' }}>{title}</Text>
         ) : null}
       </View>
       {typeof children === 'string' ? (
-        <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, lineHeight: theme.font.body * 1.5 }}>
+        <Text style={{ color: theme.colors.text, fontSize: theme.font.caption + 1, lineHeight: (theme.font.caption + 1) * 1.5, opacity: 0.88 }}>
           {children}
         </Text>
       ) : (
         children
       )}
-      {action}
+      {action ? <View style={{ marginTop: theme.space.xs }}>{action}</View> : null}
     </View>
   );
 }
@@ -515,12 +698,23 @@ export function EmptyState({
   const theme = useTheme();
   return (
     <View style={{ alignItems: 'center', justifyContent: 'center', gap: theme.space.md, padding: theme.space.xl }}>
-      <Ionicons name={icon} size={theme.icon.lg * 1.5} color={theme.colors.textMuted} />
-      <Text style={{ color: theme.colors.text, fontSize: theme.font.body, fontWeight: '700', textAlign: 'center' }}>
+      <View
+        style={{
+          width: 64,
+          height: 64,
+          borderRadius: 32,
+          backgroundColor: theme.colors.surfaceAlt,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Ionicons name={icon} size={theme.icon.lg} color={theme.colors.textMuted} />
+      </View>
+      <Text style={{ color: theme.colors.text, fontSize: theme.font.title - 2, fontWeight: '700', textAlign: 'center' }}>
         {title}
       </Text>
       {message ? (
-        <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, textAlign: 'center', lineHeight: theme.font.body * 1.5 }}>
+        <Text style={{ color: theme.colors.textMuted, fontSize: theme.font.body, textAlign: 'center', lineHeight: theme.font.body * 1.5, maxWidth: 300 }}>
           {message}
         </Text>
       ) : null}
