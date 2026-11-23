@@ -146,6 +146,8 @@ export interface AgentEvent {
   alreadyStreamed?: boolean;
   state?: RunState;
   output?: string;
+  /** 审批/澄清事件自带的待处理项；部分版本不在 status 里给 pending_controls */
+  control?: PendingControl;
 }
 export const terminalStates: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 export const statusLabels: Record<RunState, string> = {

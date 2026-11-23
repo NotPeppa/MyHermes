@@ -40,7 +40,7 @@ const text = (value: unknown): string | undefined => typeof value === 'string' &
 const stamp = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? Date.parse(value) : undefined;
 export class SessionsAdapter {
   constructor(private transport: Transport, private serverId: string) {}
-  private session(value: any): Session { if (!value || !(value.id ?? value.session_id)) throw new ProtocolError('protocol', '会话缺少标识'); return { serverId: this.serverId, id: String(value.id ?? value.session_id), title: String(value.title ?? value.name ?? '新会话'), updatedAt: Number(value.updated_at ?? Date.now()) }; }
+  private session(value: any): Session { if (!value || !(value.id ?? value.session_id)) throw new ProtocolError('protocol', '会话缺少标识'); return { serverId: this.serverId, id: String(value.id ?? value.session_id), title: String(value.title ?? value.name ?? '新会话'), updatedAt: messageTimestamp({ timestamp: value.updated_at }) ?? Date.now() }; }
   async list(limit = 100, offset = 0): Promise<Session[]> { return rows(await this.transport.request('api/sessions', { query: { limit, offset } }), 'sessions').map(v => this.session(v)); }
   async create(title?: string): Promise<Session> { const value = await this.transport.request<any>('api/sessions', { method: 'POST', body: JSON.stringify(title ? { title } : {}) }); return this.session(value.session ?? value); }
   async fork(id: string, title?: string): Promise<Session> {
@@ -83,7 +83,8 @@ export class RunsAdapter {
   }
   private map(value: any, original: Run): Run {
     if (!value || typeof value !== 'object') throw new ProtocolError('protocol', '任务响应格式错误');
-    return { ...original, status: runState(value.status), rawStatus: String(value.status ?? 'unknown'), sessionId: value.session_id ?? original.sessionId, finalOutput: typeof value.output === 'string' ? value.output : undefined, pendingControls: Array.isArray(value.pending_controls) ? value.pending_controls : [], admissionId: value.admission_id, executionGeneration: value.execution_generation, updatedAt: Date.now() };
+    return { ...original, status: runState(value.status), rawStatus: String(value.status ?? 'unknown'), sessionId: value.session_id ?? original.sessionId, finalOutput: typeof value.output === 'string' ? value.output : undefined, // 字段缺省表示「这次没告诉我」，保留已知的待处理项；显式空数组才清空
+      pendingControls: Array.isArray(value.pending_controls) ? value.pending_controls : (original.pendingControls ?? []), admissionId: value.admission_id, executionGeneration: value.execution_generation, updatedAt: Date.now() };
   }
   async status(run: Run): Promise<Run> { return this.map(await this.transport.request(`v1/runs/${segment(run.runId)}`), run); }
   async control(id: string, action: 'stop' | 'approval' | 'clarify' | 'resolve-unknown', body = {}): Promise<void> { await this.transport.request(`v1/runs/${segment(id)}/${action}`, { method: 'POST', body: JSON.stringify(body) }); }

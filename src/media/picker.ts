@@ -48,16 +48,22 @@ export async function pickImage(existingCount = 0): Promise<PickResult> {
 /** 缩放 + JPEG 重编码 + base64，返回附件或可读错误。 */
 export async function processImage(source: SourceImage, existingCount = 0): Promise<PickResult> {
   try {
-    const size = targetSize(source.width ?? MAX_EDGE, source.height ?? MAX_EDGE);
     const context = ImageManipulator.manipulate(source.uri);
-    context.resize({ width: size.width, height: size.height });
+    const hasDimensions = typeof source.width === 'number' && source.width > 0 && typeof source.height === 'number' && source.height > 0;
+    const size = hasDimensions ? targetSize(source.width!, source.height!) : null;
+    if (size) {
+      context.resize({ width: size.width, height: size.height });
+    } else {
+      // 缺少原始宽高（如系统分享传入的本地路径）时只限宽，避免强行拉伸成正方形
+      context.resize({ width: MAX_EDGE });
+    }
     const rendered = await context.renderAsync();
     const saved = await rendered.saveAsync({ compress: 0.7, format: SaveFormat.JPEG, base64: true });
     if (!saved.base64) return { kind: 'error', message: '图片处理失败，请换一张重试' };
     const attachment = attachmentFrom(saved.base64, {
       id: nextId(),
-      width: saved.width ?? size.width,
-      height: saved.height ?? size.height,
+      width: saved.width ?? size?.width ?? MAX_EDGE,
+      height: saved.height ?? size?.height ?? MAX_EDGE,
       mimeType: 'image/jpeg',
     });
     const rejected = checkAttachment(attachment, existingCount);

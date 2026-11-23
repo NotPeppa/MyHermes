@@ -8,6 +8,7 @@ const MESSAGES: Record<HermesErrorCode, string> = {
   rate_limited: '请求过于频繁（429）：请稍后重试',
   unavailable: '服务器不可用（503）：请稍后重试',
   server_error: '服务器内部错误：请稍后重试，或查看 Hermes 服务端日志',
+  bad_request: '请求被服务器拒绝：参数不被接受，刷新后重试',
   tls: 'TLS 证书校验失败：已拒绝连接，请检查证书与域名',
   network: '网络不可达：检查网络与服务器地址',
   protocol: '响应格式不符合预期：可能是版本或 Profile 不匹配',

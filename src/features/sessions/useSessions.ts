@@ -7,6 +7,7 @@ import { readActiveServerId, readCacheEnabled, writeActiveServerId } from '@/fea
 
 export interface SessionsNotice {
   tone: 'success' | 'error';
+  title?: string;
   text: string;
 }
 
@@ -26,6 +27,7 @@ export interface SessionsState {
   notice: SessionsNotice | null;
   dismissNotice: () => void;
   selectServer: (serverId: string) => void;
+  reload: () => Promise<void>;
   refresh: () => Promise<void>;
   createSession: () => Promise<string | null>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
@@ -94,9 +96,25 @@ export function useSessions(): SessionsState {
         setError(describeError(refreshError));
       }
     } finally {
-      setRefreshing(false);
+      if (activeServerIdRef.current === serverId) setRefreshing(false);
     }
   }, [repository, service]);
+
+  const reload = useCallback(async () => {
+    try {
+      const prev = activeServerIdRef.current;
+      const next = await loadServers();
+      if (!next) {
+        setSessions([]);
+        setOffline(false);
+        return;
+      }
+      if (next !== prev) await loadCache(next);
+      await refresh();
+    } catch (loadError) {
+      setError(describeError(loadError));
+    }
+  }, [loadCache, loadServers, refresh]);
 
   useEffect(() => {
     let alive = true;
@@ -135,7 +153,7 @@ export function useSessions(): SessionsState {
           if (alive && activeServerIdRef.current === serverId) setMatches(found);
         },
         (searchError: unknown) => {
-          if (alive) setNotice({ tone: 'error', text: describeError(searchError) });
+          if (alive) setNotice({ tone: 'error', title: '搜索失败', text: describeError(searchError) });
         },
       );
     }, SEARCH_DEBOUNCE_MS);
@@ -156,8 +174,12 @@ export function useSessions(): SessionsState {
       // 换实例不保留上一个实例的搜索，避免命中结果串数据
       setQuery('');
       setMatches(null);
-      void writeActiveServerId(repository, serverId);
-      void loadCache(serverId).then(() => refresh());
+      void writeActiveServerId(repository, serverId).catch(() => undefined);
+      void loadCache(serverId)
+        .then(() => refresh())
+        .catch((switchError: unknown) => {
+          if (activeServerIdRef.current === serverId) setError(describeError(switchError));
+        });
     },
     [loadCache, refresh, repository],
   );
@@ -171,10 +193,10 @@ export function useSessions(): SessionsState {
       const remote = await service.listSessions(serverId);
       const cacheEnabled = await readCacheEnabled(repository);
       if (cacheEnabled) await repository.saveSessions(serverId, remote);
-      setSessions(remote);
+      if (activeServerIdRef.current === serverId) setSessions(remote);
       return created.id;
     } catch (createError) {
-      setError(describeError(createError));
+      if (activeServerIdRef.current === serverId) setError(describeError(createError));
       return null;
     }
   }, [repository, service]);
@@ -186,9 +208,11 @@ export function useSessions(): SessionsState {
       setError(null);
       try {
         await service.renameSession(serverId, sessionId, title);
-        setSessions((current) => current.map((session) => (session.id === sessionId ? { ...session, title } : session)));
+        if (activeServerIdRef.current === serverId) {
+          setSessions((current) => current.map((session) => (session.id === sessionId ? { ...session, title } : session)));
+        }
       } catch (renameError) {
-        setError(describeError(renameError));
+        if (activeServerIdRef.current === serverId) setError(describeError(renameError));
       }
     },
     [service],
@@ -201,13 +225,15 @@ export function useSessions(): SessionsState {
       setError(null);
       try {
         if (mode === 'server') await service.deleteSession(serverId, sessionId);
-        await repository.deleteSession(serverId, sessionId);
-        setSessions((current) => current.filter((session) => session.id !== sessionId));
+        else await service.deleteLocalSession(serverId, sessionId);
+        if (activeServerIdRef.current === serverId) {
+          setSessions((current) => current.filter((session) => session.id !== sessionId));
+        }
       } catch (deleteError) {
-        setError(describeError(deleteError));
+        if (activeServerIdRef.current === serverId) setError(describeError(deleteError));
       }
     },
-    [repository, service],
+    [service],
   );
 
   const forkSession = useCallback(
@@ -241,6 +267,7 @@ export function useSessions(): SessionsState {
     notice,
     dismissNotice: () => setNotice(null),
     selectServer,
+    reload,
     refresh,
     createSession,
     renameSession,

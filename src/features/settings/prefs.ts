@@ -5,8 +5,9 @@ import type { ThemePreference } from '@/ui/theme';
 export const ACTIVE_SERVER_KEY = 'activeServerId';
 export const CACHE_ENABLED_KEY = 'cacheEnabled';
 export const THEME_PREFERENCE_KEY = 'themePreference';
+export const SHOW_TOOL_CALLS_KEY = 'showToolCalls';
 
-/** 外观偏好：默认跟随系统；非法值回落 system。 */
+/** 默认跟随系统；非法值回落 system。 */
 export async function readThemePreference(repository: Repository): Promise<ThemePreference> {
   const stored = await repository.getSetting(THEME_PREFERENCE_KEY);
   return stored === 'light' || stored === 'dark' ? stored : 'system';
@@ -14,6 +15,19 @@ export async function readThemePreference(repository: Repository): Promise<Theme
 
 export async function writeThemePreference(repository: Repository, preference: ThemePreference): Promise<void> {
   await repository.setSetting(THEME_PREFERENCE_KEY, preference);
+}
+
+/**
+ * 会话里是否显示工具调用卡片，默认开启。
+ * 关掉只影响 chat 页的工具卡片渲染，不影响事件采集与缓存——重新打开能立刻看到历史。
+ */
+export async function readShowToolCalls(repository: Repository): Promise<boolean> {
+  const stored = await repository.getSetting(SHOW_TOOL_CALLS_KEY);
+  return stored !== 'false';
+}
+
+export async function writeShowToolCalls(repository: Repository, enabled: boolean): Promise<void> {
+  await repository.setSetting(SHOW_TOOL_CALLS_KEY, enabled ? 'true' : 'false');
 }
 
 /** 缓存开关默认开启；关闭时页面跳过本地缓存读取，并在关闭瞬间清理。 */

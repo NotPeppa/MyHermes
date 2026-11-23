@@ -196,7 +196,7 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
 
     try {
       const result = await service.probe(baseUrl, apiKey.trim(), { allowHttp, signal: controller.signal });
-      if (!mountedRef.current) return null;
+      if (!mountedRef.current || controllerRef.current !== controller) return null;
       const features = enabledFeatures(result.capabilities.features);
       updateStage('capabilities', { status: 'ok', detail: `模式 ${modeLabel(result.capabilities.mode)}` });
       updateStage('auth', { status: 'ok', detail: 'Bearer 鉴权通过' });
@@ -209,7 +209,7 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
       setProbedSignature(`${url}\u0000${profilePath}\u0000${allowHttp}\u0000${apiKey}`);
       return result.capabilities;
     } catch (probeError) {
-      if (!mountedRef.current) return null;
+      if (!mountedRef.current || controllerRef.current !== controller) return null;
       const aborted = controller.signal.aborted;
       const message = aborted ? `请求超时（${PROBE_TIMEOUT_MS / 1000}s）或已取消` : describeError(probeError);
       const failedStage = aborted ? 'capabilities' : stageForError(probeError);
@@ -222,8 +222,10 @@ export function useAddServer(existing?: ServerConnection | null): AddServerState
       return null;
     } finally {
       clearTimeout(timer);
-      if (mountedRef.current) setProbing(false);
-      if (controllerRef.current === controller) controllerRef.current = null;
+      if (controllerRef.current === controller) {
+        if (mountedRef.current) setProbing(false);
+        controllerRef.current = null;
+      }
     }
   }, [allowHttp, apiKey, failAt, profilePath, service, updateStage, url]);
 

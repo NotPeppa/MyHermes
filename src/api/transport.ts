@@ -1,12 +1,13 @@
 import { buildUrl, validateBaseUrl } from './urls';
 import { HermesError, type HermesErrorCode } from '../domain/errors';
+import { redactText } from '../security/redaction';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export type ErrorKind = 'auth' | 'forbidden' | 'not_found' | 'conflict' | 'rate_limit' | 'unavailable' | 'request' | 'server' | 'http' | 'network' | 'tls' | 'timeout' | 'cancelled' | 'protocol';
 export class ProtocolError extends HermesError {
   constructor(public kind: ErrorKind, message: string, status?: number, retryAfter?: string) {
     const mapped = ({
-      auth: 'unauthorized', rate_limit: 'rate_limited', http: 'protocol', request: 'protocol', server: 'server_error',
+      auth: 'unauthorized', rate_limit: 'rate_limited', http: 'protocol', request: 'bad_request', server: 'server_error',
     } as const)[kind as 'auth' | 'rate_limit' | 'http' | 'request' | 'server'];
     const code = mapped ?? kind as HermesErrorCode;
     super(code, message, status, retryAfter);
@@ -27,7 +28,7 @@ async function readErrorMessage(response: Response): Promise<string> {
     if (!text) return '';
     const parsed = JSON.parse(text) as { error?: { message?: unknown }; message?: unknown; detail?: unknown };
     const candidate = parsed?.error?.message ?? parsed?.message ?? parsed?.detail;
-    return typeof candidate === 'string' ? candidate.slice(0, 200) : '';
+    return typeof candidate === 'string' ? redactText(candidate).slice(0, 200) : '';
   } catch {
     return '';
   }

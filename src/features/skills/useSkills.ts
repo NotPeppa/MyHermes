@@ -43,6 +43,7 @@ export function useSkills(): SkillsState {
     }
     setError(null);
     setSkillsError(null);
+    setToolsetsError(null);
     // 两个接口分开加载：/v1/skills 挂掉时 /v1/toolsets 往往仍然可用，不能一起丢
     const [skillResult, toolsetResult] = await Promise.allSettled([
       service.listSkills(serverId),
@@ -66,7 +67,6 @@ export function useSkills(): SkillsState {
       setOffline(false);
       if (skillResult.status === 'rejected') setSkillsError(describeError(skillResult.reason));
       if (toolsetResult.status === 'rejected') setToolsetsError(describeError(toolsetResult.reason));
-      if (failures.length > 0 && skillResult.status !== 'rejected') setError(describeError(failures[0]!.reason));
     }
     setLoading(false);
   }, [service]);

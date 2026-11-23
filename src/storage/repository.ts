@@ -109,12 +109,15 @@ function toServer(row: ServerRow): ServerConnection {
 }
 
 function toSession(row: SessionRow): Session {
+  const snapshot = parseJson<{ forkedFrom?: unknown }>(row.snapshot_json);
+  const forkedFrom = typeof snapshot?.forkedFrom === 'string' && snapshot.forkedFrom ? snapshot.forkedFrom : undefined;
   return {
     serverId: row.server_id,
     id: row.session_id,
     title: row.title ?? '',
     updatedAt: row.updated_at ?? 0,
     localOnly: row.local_only === 1,
+    ...(forkedFrom ? { forkedFrom } : {}),
   };
 }
 
@@ -276,7 +279,7 @@ export function createSQLiteRepository(
               session.title,
               session.updatedAt,
               session.localOnly === true ? 1 : 0,
-              null,
+              session.forkedFrom ? JSON.stringify({ forkedFrom: session.forkedFrom }) : null,
             ],
           );
         }
@@ -285,6 +288,10 @@ export function createSQLiteRepository(
 
     async deleteSession(serverId, sessionId) {
       await db.withTransactionAsync(async () => {
+        await db.runAsync(
+          'DELETE FROM tool_events WHERE server_id = ? AND run_id IN (SELECT run_id FROM runs WHERE server_id = ? AND session_id = ?)',
+          [serverId, serverId, sessionId],
+        );
         await db.runAsync('DELETE FROM sessions WHERE server_id = ? AND session_id = ?', [
           serverId,
           sessionId,

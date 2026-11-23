@@ -1,3 +1,6 @@
+import { redactText } from '@/security/redaction';
+export { redactText };
+
 /**
  * 诊断报告：只允许白名单字段进入报告，并且对文本再做一次脱敏。
  * 复制前必须移除 URL userinfo、Authorization、请求体、会话正文与设备标识。
@@ -19,26 +22,6 @@ export interface DiagnosticInput {
   lastStatusCode?: number;
   latencyMs?: number;
   lastError?: string;
-}
-
-const SECRET_PATTERNS: RegExp[] = [
-  /(authorization|proxy-authorization)\s*[:=][^\n]*/gi,
-  /(bearer)\s+[A-Za-z0-9._~+/-]+=*/gi,
-  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|pwd|key)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi,
-  /(device[_-]?id|idfv|idfa|android[_-]?id|advertising[_-]?id|imei|mac[_-]?address)\s*[:=]\s*[^\s,;]+/gi,
-  /\b[A-Za-z0-9_-]{32,}\b/g,
-];
-
-export function redactText(input: string): string {
-  let output = input;
-  // URL userinfo：https://user:pass@host → https://[已移除]@host
-  output = output.replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s@]+)@/gi, '$1[已移除]@');
-  output = output.replace(SECRET_PATTERNS[0]!, '$1: [已移除]');
-  output = output.replace(SECRET_PATTERNS[1]!, '[已移除]');
-  output = output.replace(SECRET_PATTERNS[2]!, '$1[已移除]');
-  output = output.replace(SECRET_PATTERNS[3]!, '$1: [已移除]');
-  output = output.replace(SECRET_PATTERNS[4]!, '[已移除]');
-  return output;
 }
 
 /** 只保留主机名（含端口），丢掉 userinfo、路径、查询与片段。 */

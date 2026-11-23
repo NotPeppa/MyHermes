@@ -53,7 +53,8 @@ export function useChat(serverId: string, sessionId: string): ChatState {
     void service
       .loadMessages(serverId, sessionId)
       .then(async () => {
-        if (alive) sync();
+        if (!alive) return;
+        sync();
         // 进入会话先按持久化 run_id 核对服务端状态，再恢复订阅；不重复提交
         await service.recover(serverId, sessionId);
       })
@@ -94,10 +95,12 @@ export function useChat(serverId: string, sessionId: string): ChatState {
         if (actionError instanceof HermesError && actionError.code === 'conflict') {
           // 409：状态已变化，先拉最新状态与 pending_controls，不自动重试高危操作
           setError(describeError(actionError));
-          try {
-            await service.recover(serverId, sessionId);
-          } catch {
-            /* 恢复失败保留原始 409 提示 */
+          if (mountedRef.current) {
+            try {
+              await service.recover(serverId, sessionId);
+            } catch {
+              /* 恢复失败保留原始 409 提示 */
+            }
           }
         } else {
           setError(describeError(actionError));

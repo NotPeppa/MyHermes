@@ -26,7 +26,32 @@ export class HermesService {
   private streams = new Map<string, { controller: AbortController; task: Promise<void> }>();
   private sessionCache = new Map<string, Session[]>();
   private now: () => number;
-  private async cacheEnabled(): Promise<boolean> { return await this.options.repository.getSetting('cache_enabled') !== '0'; }
+  private async cacheEnabled(): Promise<boolean> {
+    const value = await this.options.repository.getSetting('cacheEnabled');
+    if (value !== null) return value !== 'false';
+    return await this.options.repository.getSetting('cache_enabled') !== '0';
+  }
+  /** 清除内存里的会话缓存与视图状态（供设置页清缓存或本地删会话同步调用）。 */
+  clearMemoryCache(serverId?: string): void {
+    if (serverId) {
+      this.sessionCache.delete(serverId);
+      const prefix = `${JSON.stringify([serverId, '']).slice(0, -3)}`;
+      for (const key of [...this.views.keys()]) {
+        if (key.startsWith(prefix)) this.views.set(key, freshView());
+      }
+      return;
+    }
+    this.sessionCache.clear();
+    for (const key of [...this.views.keys()]) this.views.set(key, freshView());
+  }
+  /** 仅删除本地会话缓存并停止该会话的本地流订阅，不调用远端 DELETE。 */
+  async deleteLocalSession(serverId: string, sessionId: string): Promise<void> {
+    this.detach(serverId, sessionId);
+    await this.options.repository.deleteSession(serverId, sessionId);
+    const cached = this.sessionCache.get(serverId);
+    if (cached) this.sessionCache.set(serverId, cached.filter(s => s.id !== sessionId));
+    this.views.delete(keyOf(serverId, sessionId));
+  }
   private async saveSessions(serverId: string, sessions: Session[]): Promise<void> {
     this.sessionCache.set(serverId, sessions);
     if (await this.cacheEnabled()) await this.options.repository.saveSessions(serverId, sessions);
@@ -262,7 +287,7 @@ export class HermesService {
         const run: Run = { ...turn, runId: `local-${turn.clientTurnId}`, status: 'running', updatedAt: this.now() };
         await this.storeRun(run);
         if (mode === 'openai_compat') {
-          const messages = [...history, { id: turn.clientTurnId, serverId, sessionId, role: 'user' as const, body: input, createdAt: this.now() }];
+          const messages = [...history, optimistic];
           await this.saveMessages(serverId, sessionId, messages); this.patch(serverId, sessionId, { messages });
         }
         this.startStream(run, signal => viaSessionStream ? clients.sessions.stream(sessionId, turn.requestBodyJson, e => this.enqueue(run, e), signal) : clients.compat.stream(turn.requestBodyJson, run.runId, e => this.enqueue(run, e), signal), false);
@@ -325,17 +350,26 @@ export class HermesService {
       if (await this.cacheEnabled()) await this.options.repository.saveToolEvent(tool);
       const tools = view.tools.filter(t => t.id !== tool.id); tools.push(tool); this.patch(run.serverId, run.sessionId, { tools });
     }
+    if (event.kind === 'control' && event.control) {
+      // 事件里直接带着待处理项：先落到视图，审批弹层不必等 status 的 pending_controls
+      const stored = (await this.options.repository.listRuns(run.serverId, run.sessionId)).find(r => r.runId === run.runId) ?? run;
+      const merged = { ...stored, pendingControls: [event.control], updatedAt: this.now() };
+      await this.storeRun(merged);
+      this.patch(run.serverId, run.sessionId, { runs: await this.options.repository.listRuns(run.serverId, run.sessionId) });
+    }
     if (event.kind === 'terminal' || event.kind === 'control') {
       const clients = await this.clients(run.serverId);
-      if (clients.server.capabilities.mode === 'native_runs') await this.reconcile(run, clients.runs);
+      if (clients.server.capabilities.mode === 'native_runs' && !run.runId.startsWith('local-')) await this.reconcile(run, clients.runs);
       else if (event.kind === 'terminal') {
         const stored = (await this.options.repository.listRuns(run.serverId, run.sessionId)).find(r => r.runId === run.runId);
         if (stored && terminalStates.has(stored.status)) return;
         const updated = { ...run, status: event.state ?? 'unknown', finalOutput: event.output ?? this.view(run.serverId, run.sessionId).draft, updatedAt: this.now() };
         await this.storeRun(updated);
-        if (clients.server.capabilities.mode === 'native_sessions') { await this.loadMessages(run.serverId, run.sessionId); this.patch(run.serverId, run.sessionId, { draft: '' }); }
-        else {
-          const messages = [...await this.options.repository.listMessages(run.serverId, run.sessionId), { id: `${run.runId}:assistant`, serverId: run.serverId, sessionId: run.sessionId, role: 'assistant' as const, body: updated.finalOutput ?? '', createdAt: this.now() }];
+        if (clients.server.capabilities.mode === 'native_sessions' || clients.server.capabilities.mode === 'native_runs') {
+          await this.loadMessages(run.serverId, run.sessionId);
+          this.patch(run.serverId, run.sessionId, { draft: '' });
+        } else {
+          const messages = [...await this.cachedMessages(run.serverId, run.sessionId), { id: `${run.runId}:assistant`, serverId: run.serverId, sessionId: run.sessionId, role: 'assistant' as const, body: updated.finalOutput ?? '', createdAt: this.now() }];
           await this.saveMessages(run.serverId, run.sessionId, messages); this.patch(run.serverId, run.sessionId, { messages, draft: '' });
         }
       }
@@ -364,12 +398,19 @@ export class HermesService {
           this.patch(run.serverId, run.sessionId, { network: 'offline', error: errorOf(error) });
           if (!native) await this.storeRun({ ...run, status: 'unknown', updatedAt: this.now() }).catch(() => {});
         }
-      } finally { if (this.streams.get(scope)?.controller === controller) this.streams.delete(scope); }
+      } finally {
+        if (this.streams.get(scope)?.controller === controller) this.streams.delete(scope);
+        const runScope = keyOf(run.serverId, run.runId);
+        this.queues.delete(runScope);
+        this.seen.delete(runScope);
+      }
     })();
     this.streams.set(scope, { controller, task });
   }
   private async reconcile(run: Run, adapter: RunsAdapter): Promise<Run> {
-    const current = await adapter.status(run);
+    // 以持久化的那份为准再查状态：内存里的对象可能落后于事件里刚拿到的待处理项
+    const stored = (await this.options.repository.listRuns(run.serverId, run.sessionId)).find(r => r.runId === run.runId) ?? run;
+    const current = await adapter.status(stored);
     await this.storeRun(current);
     if (terminalStates.has(current.status)) {
       this.patch(run.serverId, run.sessionId, { draft: current.finalOutput ?? '' });
@@ -389,9 +430,23 @@ export class HermesService {
       const uncertain = { ...turn, submissionState: 'submission_uncertain' as const };
       await this.options.repository.saveTurn(uncertain); this.patch(serverId, turn.sessionId, { submission: uncertain });
     }
-    for (const run of await this.options.repository.listRuns(serverId, sessionId)) {
-      this.patch(serverId, run.sessionId, { runs: await this.options.repository.listRuns(serverId, run.sessionId), tools: await this.options.repository.listToolEvents(serverId, run.runId) });
-      if (run.runId.startsWith('local-')) { if (!terminalStates.has(run.status)) await this.storeRun({ ...run, status: 'unknown', updatedAt: this.now() }); continue; }
+    const allRuns = await this.options.repository.listRuns(serverId, sessionId);
+    const bySession = new Map<string, Run[]>();
+    for (const run of allRuns) {
+      const list = bySession.get(run.sessionId) ?? [];
+      list.push(run);
+      bySession.set(run.sessionId, list);
+    }
+    for (const [sid, sessionRuns] of bySession) {
+      const latest = [...sessionRuns].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      this.patch(serverId, sid, {
+        runs: sessionRuns,
+        tools: latest ? await this.options.repository.listToolEvents(serverId, latest.runId) : [],
+      });
+    }
+    for (const run of allRuns) {
+      if (terminalStates.has(run.status)) continue;
+      if (run.runId.startsWith('local-')) { await this.storeRun({ ...run, status: 'unknown', updatedAt: this.now() }); continue; }
       const scope = keyOf(serverId, run.sessionId);
       this.streams.get(scope)?.controller.abort();
       try {
@@ -417,8 +472,14 @@ export class HermesService {
   }
   async respondControl(serverId: string, runId: string, requestId: string, value: string): Promise<void> {
     const clients = await this.clients(serverId);
-    const current = await this.reconcile(await this.getRun(serverId, runId), clients.runs);
-    const control = current.pendingControls?.find(c => c.request_id === requestId);
+    const stored = await this.getRun(serverId, runId);
+    const current = await this.reconcile(stored, clients.runs);
+    // 先看 status（权威），再退回事件里带回来的身份：部分版本 status 不返回 pending_controls。
+    // 明确传入 requestId 时必须精确匹配，不回退到其他待处理项，避免误批。
+    const control = requestId
+      ? (current.pendingControls?.find(c => c.request_id === requestId)
+        ?? stored.pendingControls?.find(c => c.request_id === requestId))
+      : (current.pendingControls?.[0] ?? stored.pendingControls?.[0]);
     if (!control) throw new ProtocolError('conflict', '待处理请求已过期，请刷新');
     const clarify = /clarif/.test(control.type);
     const supported = clarify
@@ -426,8 +487,18 @@ export class HermesService {
       : this.featureOn(clients.server, 'run_approval', 'run_approval_response', 'approval_events');
     if (!supported) throw new ProtocolError('protocol', '服务器未声明此控制能力');
     if (!clarify && (!control.choices?.includes(value) && !['once', 'deny'].includes(value))) throw new ProtocolError('protocol', '审批选项无效');
-    try { await clients.runs.control(runId, clarify ? 'clarify' : 'approval', { request_id: control.request_id, execution_generation: control.execution_generation, [clarify ? 'answer' : 'choice']: value }); }
-    finally { await this.reconcile(current, clients.runs); }
+    // canonical 控制要求带执行代次；事件里没有时用 run 级的代次（GET /v1/runs/{id} 会返回）
+    const generation = control.execution_generation || current.executionGeneration || 0;
+    const body = {
+      request_id: control.request_id,
+      ...(generation ? { execution_generation: generation } : {}),
+      [clarify ? 'answer' : 'choice']: value,
+    };
+    try {
+      await clients.runs.control(runId, clarify ? 'clarify' : 'approval', body);
+      // 已回应的控制项要显式清掉：status 不会主动告诉我们「没有待处理项了」
+      await this.storeRun({ ...current, pendingControls: [], updatedAt: this.now() });
+    } finally { await this.reconcile(current, clients.runs); }
   }
   async resolveUnknown(serverId: string, runId: string, confirmed: boolean): Promise<void> {
     const clients = await this.clients(serverId);

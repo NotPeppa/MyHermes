@@ -152,9 +152,12 @@ interface ExpoDatabaseLike {
   getAllAsync<T>(source: string, params: SQLiteBindValue[]): Promise<T[]>;
   getFirstAsync<T>(source: string, params: SQLiteBindValue[]): Promise<T | null>;
   withTransactionAsync(task: () => Promise<void>): Promise<void>;
+  withExclusiveTransactionAsync?(task: (txn: ExpoDatabaseLike) => Promise<void>): Promise<void>;
 }
 
 function adaptExpoDatabase(db: ExpoDatabaseLike): SQLiteDatabase {
+  // 串行化事务，避免 expo-sqlite 并发调用 withTransactionAsync 触发嵌套事务报错
+  let txQueue: Promise<void> = Promise.resolve();
   return {
     execAsync: (source) => db.execAsync(source),
     runAsync: async (source, params = []) => {
@@ -162,7 +165,11 @@ function adaptExpoDatabase(db: ExpoDatabaseLike): SQLiteDatabase {
     },
     getAllAsync: (source, params = []) => db.getAllAsync(source, params),
     getFirstAsync: (source, params = []) => db.getFirstAsync(source, params),
-    withTransactionAsync: (task) => db.withTransactionAsync(task),
+    withTransactionAsync: (task) => {
+      const run = txQueue.then(() => db.withTransactionAsync(task));
+      txQueue = run.catch(() => undefined);
+      return run;
+    },
   };
 }
 
