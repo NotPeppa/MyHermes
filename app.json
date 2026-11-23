@@ -15,7 +15,8 @@
       "package": "dev.myhermes.mobile",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0F172A"
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#0B1120"
       }
     },
     "plugins": [
@@ -25,9 +26,9 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 160,
           "resizeMode": "contain",
-          "backgroundColor": "#0F172A",
+          "backgroundColor": "#0B1120",
           "dark": {
-            "backgroundColor": "#0F172A"
+            "backgroundColor": "#0B1120"
           }
         }
       ],
